@@ -293,6 +293,29 @@ console.log('\n=== W8: 代理 CA 探测的纪律（防「用 leaf 当 CA」回�
     !/补上代理 CA/.test(src), '旧的失败重试文案还在');
 }
 
+// ===========================================================================
+console.log('\n=== W7: autoInstallApp=false 时仍要启动「已装」的那份 ===');
+// 真机踩出来的：关掉自动安装等于整个 ensureAppInstalled 都不跑，而
+// 「已装就启动」那一段就在它函数体里 —— 于是 DSH 重启后岛体不会被拉起，
+// 屏幕上没有岛，日志里只有一行「配置关闭，未检查 app」，看不出任何异常。
+// 用户的心智是「插件装好了、DSH 也重启了，就该有岛」，这个状态看起来
+// 完全像「插件没装好」。两件事语义不同，必须拆开。
+// ===========================================================================
+{
+  const src = fs.readFileSync(path.join(ROOT, 'lib', 'index.js'), 'utf8');
+  check('autoInstallApp=false 分支会调用 ensureAppInstalled（否则不会启动已装的 app）',
+    /else \{[\s\S]{0,500}ensureAppInstalled\(\{ installDir, log, dryRun: true, launch: true \}\)/.test(src),
+    '没找到「只启动不安装」的调用');
+  check('该分支传了 dryRun: true（保证不写文件、不下载）',
+    /dryRun: true, launch: true/.test(src));
+  check('该分支传了 launch: true（这才是启动意图）',
+    /ensureAppInstalled\(\{ installDir, log, dryRun: true, launch: true \}\)/.test(src));
+  check('日志会说明「自动安装已关闭，仅在已装时启动」',
+    /自动安装已关闭，仅在已装时启动/.test(src));
+  check('不再出现「配置关闭，未检查 app」那种什么都没做的写法',
+    !/install: 配置关闭，未检查 app/.test(src));
+}
+
 fs.rmSync(BASE, { recursive: true, force: true });
 console.log('\n' + '='.repeat(44));
 console.log('通过 ' + pass + ' / 失败 ' + fail);
