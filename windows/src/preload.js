@@ -71,6 +71,20 @@ contextBridge.exposeInMainWorld('island', {
   },
 
   /**
+   * 确认一条（或几条）提醒：`POST /nudge/ack`。
+   *
+   * 提醒与跳转的语义差别就在这个调用上：跳转是「取走即消失」的队列 drain，
+   * 而提醒必须**显式确认**才离开 —— 因为岛可能被隐藏很久，一条提醒在用户
+   * 真正看过之前不该自己消失。
+   *
+   * 通道名必须与 main.js 的 `ipcMain.handle('island:nudge-ack')` 逐字一致
+   * （拼错的症状同样是「点了没反应」，运行时零报错）。
+   */
+  nudgeAck(payload) {
+    return ipcRenderer.invoke('island:nudge-ack', payload || {});
+  },
+
+  /**
    * 主进程推来的「指针在窗口里的 CSS 坐标」（约 30Hz，位置不变就不发）。
    *
    * ## 为什么不用浏览器自己的 mousemove

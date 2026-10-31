@@ -79,6 +79,21 @@ const ENTRY_FIELDS = [
  */
 const ENTRY_ALWAYS = ['id', 'label', 'shortId', 'status', 'live', 'glow', 'tag', 'badge'];
 
+/**
+ * 提醒条目的 DTO 白名单（`docs/nudge-fusion.md` §2.1 写死的那八个字段）。
+ *
+ * 与 entry 的规则相反：这里**每个键都恒有**，不做「空值省略」。理由不是
+ * 体积（一屏最多 4 条），而是 `rev`：提醒是「有 / 没有」这种一刀切的变化，
+ * 若某个字段空时省键、有值时补键，同一份内容从不同路径拼出来会算出不同
+ * 的 rev → 白推一跳。契约也明确要求空列表仍是 `[]` 而不是缺字段。
+ */
+const NUDGE_FIELDS = [
+  'id', 'kind', 'severity', 'sessionId', 'label', 'detail', 'at', 'count',
+];
+
+/** 三类提醒（与服务端 `lib/nudge.js` 的 KINDS 同值）。 */
+const NUDGE_KINDS = ['needs_choice', 'failed', 'completed'];
+
 /** 非字符串原样（null）透传；数字转成字符串（投影里的 token 数可能是数字）。 */
 function text(v) {
   if (v === null || v === undefined) return null;
@@ -208,6 +223,72 @@ function jumpDto(j) {
   return { kind, brief, at };
 }
 
+/** 会话 id 短码（与 monitor.js 的 shortId 逐字一致，渲染层不再做 fallback）。 */
+function shortIdOf(id) {
+  const s = String(id || '');
+  return (s.startsWith('session-') ? s.slice(8) : s).slice(0, 8);
+}
+
+/**
+ * 一条提醒 → DTO（契约 §2.1 的八个字段，全部恒有）。
+ *
+ * 入参已经是 `nudges.js` 归一化过的形状；这里再挡一次
+ * （`id` 空 / `kind` 认不出）是因为快照是**跨进程边界**，而渲染层没有能力
+ * 判断「这条该不该画」—— 它会把 `kind` 直接映射成颜色，认不出的 kind 只会
+ * 静默落到灰。丢掉它比画一条没有语义的提醒便宜。
+ *
+ * @param {unknown} raw
+ * @returns {object|null}
+ */
+function mapNudge(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const id = typeof raw.id === 'string' ? raw.id.trim() : '';
+  if (!id) return null;
+  const kind = typeof raw.kind === 'string' ? raw.kind : '';
+  if (!NUDGE_KINDS.includes(kind)) return null;
+
+  const sessionId = typeof raw.sessionId === 'string' ? raw.sessionId : '';
+  const title = typeof raw.title === 'string' ? raw.title.trim() : '';
+  const label = typeof raw.label === 'string' ? raw.label.trim() : '';
+  return {
+    id,
+    kind,
+    severity: (() => {
+      const s = num(raw.severity);
+      return (s === null) ? 0 : Math.min(2, Math.max(0, Math.trunc(s)));
+    })(),
+    sessionId,
+    // label = title || shortId（渲染层不再做 fallback，见契约 §2.1）
+    label: (title || label || shortIdOf(sessionId)) || '',
+    detail: (() => {
+      const d = (typeof raw.detail === 'string') ? raw.detail.replace(/\s+/gu, ' ').trim() : '';
+      return (d.length <= 120) ? d : d.slice(0, 119) + '…';
+    })(),
+    at: typeof raw.at === 'string' ? raw.at : '',
+    count: Math.max(1, count(raw.count)),
+  };
+}
+
+/**
+ * 提醒列表 → DTO 数组。
+ *
+ * 三层降级，全部**不抛**：不是数组 → `[]`；条目非法 → 丢那一条；全非法 → `[]`。
+ * 空列表必须仍是 `[]` 而不是缺字段 —— 否则 `rev` 会在「字段缺失 ↔ 空数组」
+ * 之间来回抖，每次抖动就是一跳无意义的重渲染。
+ *
+ * @param {unknown} list
+ * @returns {object[]}
+ */
+function nudgesDto(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const raw of list) {
+    const dto = mapNudge(raw);
+    if (dto) out.push(dto);
+  }
+  return out;
+}
+
 /**
  * 稳定序列化：对象键排序、数组保序。
  *
@@ -285,18 +366,25 @@ function revOf(payload) {
  * serverNow（也见上文为什么）。
  *
  * @param {{ entries?: Array<object>, config?: object, bridge?: object,
- *           jump?: object|null, now?: number }} input
+ *           jump?: object|null, nudges?: Array<object>, now?: number }} input
  *   entries 是 monitor.poll() 的内部 entry 数组；config 是 config.load() 的结果。
- * @returns {{ v: number, rev: string, entries: object[], config: object,
- *             bridge: object, jump: object|null, serverNow: number }}
+ *   nudges 是 nudges.js 归一化后的提醒数组（非数组按空列表处理）。
+ * @returns {{ v: number, rev: string, entries: object[], nudges: object[],
+ *             config: object, bridge: object, jump: object|null, serverNow: number }}
  */
 function buildSnapshot(input) {
   const i = (input && typeof input === 'object') ? input : {};
   const now = (typeof i.now === 'number' && Number.isFinite(i.now)) ? i.now : Date.now();
   const entries = Array.isArray(i.entries) ? i.entries.map(mapEntry) : [];
+  // 提醒的映射单独 try：它不该有抛的机会（nudgesDto 内部已经全量兜底），
+  // 但**整份快照的构造**不能被一条坏提醒带崩 —— 那会让岛停在旧数据上，
+  // 而「一条提醒画不出来」只是少一行。
+  let nudges = [];
+  try { nudges = nudgesDto(i.nudges); } catch { nudges = []; }
   const content = {
     v: SNAPSHOT_VERSION,
     entries,
+    nudges,
     config: configDto(i.config),
     bridge: bridgeDto(i.bridge),
     jump: jumpDto(i.jump),
@@ -305,6 +393,7 @@ function buildSnapshot(input) {
     v: content.v,
     rev: revOf(content),
     entries: content.entries,
+    nudges: content.nudges,
     config: content.config,
     bridge: content.bridge,
     jump: content.jump,
@@ -348,7 +437,11 @@ module.exports = {
   ACTIVE_TICK_MS,
   IDLE_TICK_MS,
   ENTRY_FIELDS,
+  NUDGE_FIELDS,
+  NUDGE_KINDS,
   mapEntry,
+  mapNudge,
+  nudgesDto,
   configDto,
   bridgeDto,
   jumpDto,

@@ -132,10 +132,13 @@ const dto = build();
 
 console.log('=== P1: DTO 形状 —— 恒有字段与白名单 ===');
 {
-  check('顶层字段只有契约 §4 的 7 项',
+  // 8 项 = 契约 §4 的 7 项 + 提醒融合新增的顶层 nudges（docs/nudge-fusion.md §2.1）。
+  check('顶层字段只有契约 §4 + 提醒的 8 项',
     JSON.stringify(Object.keys(dto).sort()) ===
-      JSON.stringify(['bridge', 'config', 'entries', 'jump', 'rev', 'serverNow', 'v'].sort()),
+      JSON.stringify(['bridge', 'config', 'entries', 'jump', 'nudges', 'rev', 'serverNow', 'v'].sort()),
     Object.keys(dto).join(','));
+  check('nudges 缺省是空数组（字段存在、类型稳定，不随内容抖动）',
+    Array.isArray(dto.nudges) && dto.nudges.length === 0, JSON.stringify(dto.nudges));
   check('v === 2', dto.v === 2);
   check('rev 是非空字符串（~13 字符 base36）', typeof dto.rev === 'string' && dto.rev.length >= 10 && /^[0-9a-z]+$/.test(dto.rev), dto.rev);
   check('serverNow 用传入的 now', dto.serverNow === NOW);
@@ -313,6 +316,65 @@ console.log('\n=== P7: nextDelay —— 自适应轮询 ===');
     S.nextDelay([{ live: false, status: 'thinking' }], false) === 1000);
   check('列表里任意一个活跃就 250ms',
     S.nextDelay([{ live: false }, { live: true }, { live: false }], false) === 250);
+}
+
+console.log('\n=== P8: 提醒（nudges）—— 字段白名单 / 降级 / rev ===');
+{
+  const nudge = (over = {}) => ({
+    id: 'needs_choice::session-abc::7',
+    kind: 'needs_choice', severity: 0, sessionId: 'session-abc',
+    title: '某个会话', project: '默认工作区',
+    detail: '等待你批准一个操作', at: '19:55', atMs: NOW, count: 1, ts: NOW,
+    ...over,
+  });
+  const withNudges = (list) => S.buildSnapshot({ entries: rawEntries(), nudges: list, config: cfg, bridge, jump: null, now: NOW });
+
+  const one = withNudges([nudge()]);
+  check('一条合法提醒进 DTO', one.nudges.length === 1, String(one.nudges.length));
+  check('DTO 只有契约 §2.1 的八个字段',
+    JSON.stringify(Object.keys(one.nudges[0]).sort()) === JSON.stringify(S.NUDGE_FIELDS.slice().sort()),
+    Object.keys(one.nudges[0]).join(','));
+  check('整份 payload 里不出现 title / project 键（提醒只发 label）',
+    !/"title":/.test(JSON.stringify(one)) && !/"project":/.test(JSON.stringify(one)),
+    JSON.stringify(one.nudges[0]));
+  check('label = title（title 有值时优先）', one.nudges[0].label === '某个会话', one.nudges[0].label);
+  check('label 在 title 为空时退回 shortId（渲染层不做 fallback）',
+    S.mapNudge(nudge({ title: '', sessionId: 'session-a1b2c3d4' })).label === 'a1b2c3d4',
+    S.mapNudge(nudge({ title: '', sessionId: 'session-a1b2c3d4' })).label);
+  check('detail 超过 120 字被截断（主进程是唯一截断点）',
+    S.mapNudge(nudge({ detail: 'x'.repeat(200) })).detail.length <= 120);
+  check('count 缺省至少 1（合并语义下「一条提醒」本就算一次）',
+    S.mapNudge(nudge({ count: 0 })).count === 1 && S.mapNudge(nudge({ count: 3 })).count === 3);
+
+  // 三个降级分支，全都不许抛
+  const notArray = withNudges('not-an-array');
+  check('nudges 不是数组 → 降级为空数组', Array.isArray(notArray.nudges) && notArray.nudges.length === 0);
+  let threw = false;
+  try { withNudges([{ id: '', kind: 'failed' }]); } catch { threw = true; }
+  check('条目非法 → 丢弃该条，不让整份快照构造抛错', !threw && withNudges([{ id: '', kind: 'failed' }]).nudges.length === 0);
+  check('kind 认不出的条目被丢',
+    S.nudgesDto([nudge({ kind: 'weird' })]).length === 0);
+  check('nudgesDto 对 undefined / null 容错（旧主进程不发这个字段）',
+    S.nudgesDto(undefined).length === 0 && S.nudgesDto(null).length === 0);
+
+  // rev 语义（这三条是本节的重点）
+  const empty = withNudges([]);
+  check('空数组 rev 与「一个提醒都没有的基线」一致（字段存在、类型稳定）',
+    empty.rev === S.buildSnapshot({ entries: rawEntries(), config: cfg, bridge, jump: null, now: NOW }).rev,
+    empty.rev);
+  check('空数组构建两次 rev 相同（不抖动）', withNudges([]).rev === empty.rev);
+  check('缺省（不传 nudges）与空数组的 rev 相同（字段缺失 ↔ 空数组不抖）',
+    withNudges([]).rev === build(undefined, {}).rev);
+  check('提醒变化必然改 rev（否则界面停在旧列表上）', one.rev !== empty.rev);
+  check('count 变化改 rev（合并次数是内容）',
+    withNudges([nudge({ count: 2 })]).rev !== one.rev);
+  check('Severity 纠正后仍只认三种 kind',
+    new Set(one.nudges.map((n) => n.kind)).size === 1 && S.NUDGE_KINDS.includes(one.nudges[0].kind));
+
+  // 体积：提醒不许把 title/project/ts 带出去（每条几十字节 × 4 条 × 每 2 秒）
+  const wire = JSON.stringify(one).length;
+  const rawLen = JSON.stringify({ entries: rawEntries(), nudges: [nudge()], config: cfg, bridge, jump: null }).length;
+  check('提醒 DTO 比原始条目小（白名单真的剥掉了字段）', wire < rawLen, wire + ' vs ' + rawLen);
 }
 
 console.log('\n' + '='.repeat(44));

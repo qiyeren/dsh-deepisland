@@ -16,9 +16,11 @@ const SUITES = [
   'activity.test.js',
   'monitor.test.js',
   'bridge.test.js',
+  'nudges.test.js',
   'jump.test.js',
   'snapshot.test.js',
   'setup-entry.test.js',
+  'nudge-ui.test.js',
 ];
 
 /**

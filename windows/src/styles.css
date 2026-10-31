@@ -82,6 +82,19 @@
   --chip: rgba(255, 255, 255, 0.10);
   /* 详情正文块的颜色（Mac: rgb(0.65,0.84,1.0)） */
   --detail-ink: rgb(166, 214, 255);
+
+  /* 提醒（融合自 dsh-nudge）的三档颜色。
+   *
+   * **每档只定义这一次**：徽标、行色条、顶部发丝线都从这里取。散着写十六
+   * 进制必然会在某次改动里分叉，而症状只是「徽标和色条不是一个颜色」——
+   * 不报错，只能靠截图看出来。
+   *
+   * 与状态色（--glow 那一套）刻意分开：状态色说的是「这个会话在干什么」，
+   * 提醒色说的是「有件事等你处理」。needs_choice 与 waiting 同属琥珀系，
+   * 但前者是事件、后者是状态 —— 语义不同就不该共用一个变量。 */
+  --nudge-choice: #F5A623;
+  --nudge-failed: #E74C3C;
+  --nudge-done: #4ADE80;
 }
 
 /* ───────────────── 图标：CSS mask + 内联 SVG ─────────────────
@@ -459,6 +472,10 @@ html, body {
 .island:is([data-mode="hud"], [data-expanded="1"]) .hud > .pressure { animation-delay: 20ms; }
 .island:is([data-mode="hud"], [data-expanded="1"]) .hud > .detail   { animation-delay: 50ms; }
 .island:is([data-mode="hud"], [data-expanded="1"]) .hud > .todo     { animation-delay: 80ms; }
+/* 提醒区块与列表同属「信息列表层」，用同一个 110ms —— 它是列表的第 0 行，
+ * 单独再插一档延迟就等于把契约 §6.3 那条阶梯（0/20/50/80/110/140/170）
+ * 改成八档，而八档在这个 220ms 的窗口里已经分不出先后了。 */
+.island:is([data-mode="hud"], [data-expanded="1"]) .hud > .nudges   { animation-delay: 110ms; }
 .island:is([data-mode="hud"], [data-expanded="1"]) .hud > .list     { animation-delay: 110ms; }
 .island:is([data-mode="hud"], [data-expanded="1"]) .hud > .stats    { animation-delay: 140ms; }
 .island:is([data-mode="hud"], [data-expanded="1"]) .hud > .footer   { animation-delay: 170ms; }
@@ -525,6 +542,58 @@ html, body {
 /* 折叠态耗时和上下文共用仪表位；显式声明等宽数字，别指望继承 ——
    这个节点由渲染层按状态重建内容，继承链上任何一处字体回退都会让它抖。 */
 .gauge.elapsed { font-variant-numeric: tabular-nums; }
+
+/* ───────────────── 提醒徽标（折叠态，契约 §2.2） ─────────────────
+ *
+ * `?N`（待选择）/ `!N`（失败）/ `✔N`（完成），N = 同类条目 count 之和。
+ * 底色沿用胶囊（白 10%），只有文字色按类别分三档 —— 折叠条只有 34px 高，
+ * 再给整块徽标上彩色底会把「一条安静的信息带」变成告警条。
+ *
+ * 点数太多时省略号会吃掉标题：徽标是 flex:0 0 auto，标题是 flex:1 1 auto，
+ * 挤压顺序由 CSS 决定，不需要渲染层算宽度（那会引入同步布局）。
+ */
+.nudge-badge {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-soft);
+}
+
+.nudge-badge.choice {
+  color: var(--nudge-choice);
+  background: color-mix(in srgb, var(--nudge-choice) 16%, transparent);
+}
+
+.nudge-badge.failed {
+  color: var(--nudge-failed);
+  background: color-mix(in srgb, var(--nudge-failed) 16%, transparent);
+}
+
+.nudge-badge.done {
+  color: var(--nudge-done);
+  background: color-mix(in srgb, var(--nudge-done) 16%, transparent);
+}
+
+/* 内发光带的一点点强调：**只调不透明度，不引入第二份 --glow**。
+ *
+ * 「有件事等你」时那条光即使没有活跃会话也亮着 —— 这正是它该说的话：
+ * 岛平时为空就藏了，而提醒到了必须让它有存在感。颜色仍由 --glow 说
+ * （renderer 已按类别覆盖过它），这里不再多一种色。
+ *
+ * ⚠️ 只能写 `opacity: 1`，不能写 0：`[data-live="1"]` 那条也是 opacity:1、
+ * 特异性相同。写 0 会把「有活跃会话、但没提醒」的常态内发光带整条掐掉 ——
+ * 而且这个回归不会报错，只表现为「岛突然不发光了」。
+ */
+.island[data-nudge="choice"] .band,
+.island[data-nudge="failed"] .band,
+.island[data-nudge="done"] .band {
+  opacity: 1;
+}
+
+/* 失败态的一次性扫光：复用 .band::before 那一层，只换触发条件。
+ * 为什么复用而不是新增一层：多一层扫光就多一次整带重绘，而这两个时刻的
+ * 视觉诉求完全一样（「刚刚出事，看一眼」）。 */
+.island[data-nudge="failed"][data-glow="1"] .band::before {
+  animation: done-glint 1.1s var(--snap) 1;
+}
 
 /* ───────────────── 状态动效（契约 §6.4） ─────────────────
  *
@@ -742,6 +811,101 @@ html, body {
   color: var(--text);
   flex: 0 0 auto;
   white-space: nowrap;
+}
+
+/* ───────────────── 提醒区块（展开 HUD，契约 §2.2） ─────────────────
+ *
+ * 结构：`.nudge[data-kind]` > `.nudge-bar`（类色条）+ `.nudge-label` +
+ * `.nudge-detail` + `.nudge-at`。
+ *
+ * ## 为什么是「色条 + 两段文字」而不是卡片
+ *
+ * HUD 展开只有 436px 宽、最多 4 条提醒。卡片（边框 + 底色 + 内边距）在
+ * 这个尺寸上会把每条压成两行，四条就是八行 —— 岛体撑到几百像素高，
+ * 从屏幕顶端看下去像一块告示板。色条 + 单行文字是同信息量下最矮的写法，
+ * 而且色条本身就是类别信号，不需要再加图标。
+ *
+ * ## 为什么点击行要 no-drag
+ *
+ * 岛的左右 12px 是拖窗热区（见 .island-clip）。v2.1 虽然已经改成自定义
+ * 拖窗（pointerdown + 位移判定），但 `-webkit-app-region` 的默认继承仍
+ * 会让 Chromium 把这里的点击当成非客户区操作 —— 与 .row 同理，显式排除。
+ */
+.nudges {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 6px;
+  flex: 0 0 auto;
+}
+
+.nudges:empty { display: none; }
+
+.nudge {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 20px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  -webkit-app-region: no-drag;
+  cursor: pointer;
+  /* 只过渡 background-color：卡片上不出现 box-shadow/filter 过渡（契约 §6.2） */
+  transition: background-color 0.15s ease;
+}
+
+.nudge:hover { background: rgba(255, 255, 255, 0.13); }
+
+/* 类色条：3px 宽的一条竖线，颜色是这条提醒的类别。
+ * 用 border-left 而不是伪元素：伪元素要多一个节点、还要 absolute 定位，
+ * 而这里只需要一根线 —— 同一个视觉结果，少一层结构。 */
+.nudge-bar {
+  flex: 0 0 auto;
+  width: 3px;
+  height: 12px;
+  border-radius: 2px;
+  background: var(--nudge-bar, var(--text-ghost));
+}
+
+.nudge[data-kind="needs_choice"] { --nudge-bar: var(--nudge-choice); }
+.nudge[data-kind="failed"]       { --nudge-bar: var(--nudge-failed); }
+.nudge[data-kind="completed"]    { --nudge-bar: var(--nudge-done); }
+
+.nudge-label {
+  flex: 0 0 auto;
+  max-width: 42%;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 明细：可伸缩的那一段。它是「到底发生了什么」的唯一载体（标题只是
+ * 哪个会话），所以挤压顺序放在最后 —— 标题先让位，明细才截。 */
+.nudge-detail {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 10px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nudge-at {
+  flex: 0 0 auto;
+  font-size: 9.5px;
+  color: var(--text-soft);
+  white-space: nowrap;
+}
+
+/* 提醒行的键盘焦点环：行不参与 ↑/↓（见 renderer 的说明），但 tabindex="-1"
+ * 留下的是「只读可达性」；焦点环仍按既有口径给，保持视觉语言一致。 */
+.nudge:focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--glow) 70%, transparent);
+  outline-offset: -1px;
 }
 
 /* ───────────────── 会话行（多会话列表） ─────────────────
