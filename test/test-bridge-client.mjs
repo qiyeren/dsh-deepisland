@@ -163,11 +163,20 @@ console.log('\n=== T2: 端到端 —— POST /jump → 客户端 openSession ===
 //      轮询的僵尸客户端**（它们从 47311 顺延探测、永不停止）。桥一旦落在
 //      这个区间，队列会被它们抢走 —— 投递被无 uiWorkspace 的僵尸消费，
 //      满屏假红（曾表现为 bridgeclient 偶发 27/5，时好时坏）。
-// 解法：用操作系统分配的临时端口（Windows 临时区间 49152+，天然两边都避开）。
+// 解法：用操作系统分配的临时端口，只要**落在探测区间之外**就够。
+//
+// ⚠️ 别把判据写成 `port > 47322`。那条断言假设「临时端口一定在 Windows 的
+// 49152+ 区间」，而实测不成立：本机（Windows 10/11）`listen(0)` 分配出来的是
+// 9000–17000 段（实测 9441 / 11845 / 17143），于是这条断言**恒定失败**、
+// 把整个 bridgeclient 套件的红数带进全量回归 —— 而真正要保证的事
+// （端口不在 47311..47322 这个探测区间）其实一直是成立的。
+// 判据按**意图**写：探测区间之外即可。
 {
   const port = await freePort();
-  check('拿到一个临时端口（远离默认探测区间）',
-    port > 47322 && port !== 47900, String(port));
+  const PROBE_LOW = 47311;
+  const PROBE_HIGH = 47322;   // 与 BRIDGE_PORT_TRIES=12 对应
+  check('拿到一个远离默认探测区间的端口',
+    port > 0 && (port < PROBE_LOW || port > PROBE_HIGH), String(port));
 
   const bridge = port > 0 ? await server.startBridge({ port, log: () => {} }) : null;
   check('服务端桥已起', !!bridge);
