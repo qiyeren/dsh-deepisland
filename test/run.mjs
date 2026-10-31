@@ -23,6 +23,9 @@ const SUITES = {
   mount: 'test-mount.mjs',
   bridge: 'test-bridge.mjs',
   bridgeclient: 'test-bridge-client.mjs',
+  // 提醒（融合自 dsh-nudge）：nudge 测语义、nudgebridge 测 HTTP 搬运
+  nudge: 'test-nudge.mjs',
+  nudgebridge: 'test-nudge-bridge.mjs',
   installdl: 'test-install-dl.mjs',
   installwin: 'test-install-win.mjs',
   perf: 'perf.mjs',

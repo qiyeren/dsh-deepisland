@@ -35,7 +35,17 @@ const WHITELIST = [
   'enabled', 'notchEnabled', 'jumpEnabled', 'hideWhenIdle', 'scale',
   'placement', 'platformMode', 'glowEffect', 'expandOnHover',
   'showSubagentCount', 'bridgeEnabled',
+  // 提醒（nudge 融合）的九个键。**必须在这里**：save() 会剔掉白名单外的键，
+  // 而 app 每次切岛的显隐/钉住都会 save 一次 —— 少列这些键的话，用户刚在
+  // 设置面板调好「一屏几条 / 静音时段」，随手点一下托盘「隐藏灵动岛」就
+  // 全被抹掉，而且是静默的（文件里少了几个键，没有任何报错）。
+  'nudgeEnabled', 'nudgeOnCompleted', 'nudgeOnFailed', 'nudgeOnChoice',
+  'nudgeAlertOnToolError', 'nudgeMuteRanges', 'nudgeMergeWindowMs',
+  'nudgeMaxItems', 'nudgeTtlMinutes',
 ];
+
+/** 岛上一屏最多列几条提醒的默认值（与插件 CONFIG_ALLOWED 的默认一致）。 */
+const DEFAULT_NUDGE_MAX_ITEMS = 4;
 
 /** `%APPDATA%\DSHNotch` —— 与 `lib/index.js` 的 `appDataDir()` 同判定。 */
 function appDataDir() {
@@ -69,6 +79,9 @@ function defaultValue() {
     jumpEnabled: true,        // 点岛上的对话是否直接跳会话
     idleHide: true,           // 空闲自动收起
     scale: 1.0,
+    // 提醒一屏几条（契约 §1.4）。它也在 raw 里，但主进程每拍要读它，
+    // 所以抬到顶层 —— 从 raw 读等于「每拍解析一份可能被手改坏的 JSON」。
+    nudgeMaxItems: DEFAULT_NUDGE_MAX_ITEMS,
     raw: {},
     fileExists: false,
   };
@@ -113,6 +126,7 @@ function load() {
         if (typeof obj.scale === 'number' && obj.scale >= 0.5 && obj.scale <= 2.0) {
           value.scale = obj.scale;
         }
+        value.nudgeMaxItems = pickNudgeMaxItems(obj.nudgeMaxItems);
       }
     } catch { /* 文件半截/损坏 → 用默认值，不崩 */ }
   }
@@ -187,8 +201,29 @@ function equalBehavior(a, b) {
     && a.fileExists === b.fileExists;
 }
 
+/**
+ * 岛上一屏最多列几条提醒（契约 §1.4 的 `nudgeMaxItems`，1..8）。
+ *
+ * 越界不 clamp 到边上的合法值而是退回默认：用户把文件改成 0 或 99 通常是
+ * 手滑或抄错了行，静默显示 1 条 / 8 条会让他以为设置生效了。
+ *
+ * 这个值被 `load()` 抬到顶层字段（而不是只留在 raw 里）：主进程每拍要读它
+ * 一次，而 raw 是「用户原文件」的镜像 —— 从那里读等于把「读配置」写成
+ * 「读一份可能被手改坏的 JSON」。
+ *
+ * @param {unknown} v 原文件里的值
+ * @returns {number} 1..8，非法值退回 4
+ */
+function pickNudgeMaxItems(v) {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return DEFAULT_NUDGE_MAX_ITEMS;
+  const n = Math.trunc(v);
+  if (n < 1 || n > 8) return DEFAULT_NUDGE_MAX_ITEMS;
+  return n;
+}
+
 module.exports = {
   WHITELIST,
+  DEFAULT_NUDGE_MAX_ITEMS,
   appDataDir,
   storePath,
   defaultValue,
@@ -198,4 +233,5 @@ module.exports = {
   notchVisible,
   toggleNotch,
   equalBehavior,
+  pickNudgeMaxItems,
 };

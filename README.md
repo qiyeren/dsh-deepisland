@@ -65,6 +65,7 @@
 - **界面与动效**：宽/高/圆角共用一条按 SwiftUI 弹簧解析式采样 61 点的 `linear()` 真弹簧；展开时内容按层阶梯入场；思考呼吸 / 工具流光 / 等待脉冲 / 完成微光，全部受「光效开关」与系统 `prefers-reduced-motion` 双重门控。
 - **无感本机跳转**：通过本机回环 HTTP 握手桥与 DSH 内部视图管理器联动，点击即可精准唤起并定位目标会话。
 - **自动防误唤醒**：内置回合结束标记识别（`sawTurnEnd`），会话交付后杜绝残存投影引发假性激活。
+- **三种「该你处理了」时刻**（本 fork 新增，融合自 [`HalfDone03/dsh-nudge`](https://github.com/HalfDone03/dsh-nudge) 的事件语义）：回合**完成**、**等你批准或回答**、**执行失败**时，在岛体上多出一条提醒；点它就**直接跳到那个会话**（走同一条 `/jump` 桥，不是只把 DSH 窗口带到前台）。原插件用一次性 WPF 卡片，每次都起一个 `powershell.exe`（约 60–80MB、100–200ms）、15 秒后自己消失、点击只能聚焦主窗口 —— 换成常驻岛体后这三件事都省了。契约与设计取舍见 [`docs/nudge-fusion.md`](./docs/nudge-fusion.md)。
 
 ---
 
@@ -148,6 +149,22 @@ cd swift
 | `bridgePort` | number | `47311` | 本机通信端口（冲突时向后顺延并在 `bridge.json` 回写） |
 | `autoInstallApp` | boolean | `true` | 缺少原生应用时是否自动拉取匹配版本安装 |
 
+### 提醒（融合自 dsh-nudge）
+
+| 参数名 | 类型 | 默认值 | 描述 |
+| :--- | :---: | :---: | :--- |
+| `nudgeEnabled` | boolean | `true` | 提醒总开关（关掉后岛体一条都不显示） |
+| `nudgeOnChoice` | boolean | `true` | 等你批准 / 回答时提醒 |
+| `nudgeOnFailed` | boolean | `true` | 回合失败（`error` / `blocked`）时提醒 |
+| `nudgeOnCompleted` | boolean | `true` | 回合完成（含 `max-tokens` 截断）时提醒 |
+| `nudgeAlertOnToolError` | boolean | `true` | 单次工具调用失败是否也算一条失败提醒 |
+| `nudgeMuteRanges` | string | `""` | 静音时段，`HH:MM-HH:MM`，逗号分隔多段，支持跨零点（如 `22:00-08:00`）；留空 = 不静音 |
+| `nudgeMaxItems` | number | `4` | 岛上一屏最多显示几条（1–8） |
+| `nudgeMergeWindowMs` | number | `1200` | 同一会话同一类别在建条目后，这段时间内的重复事件只加计数 |
+| `nudgeTtlMinutes` | number | `30` | 一条提醒最多留多久，超时自动丢弃 |
+
+`aborted`（用户自己按了停止）**从不提醒** —— 他知道这一轮没跑完；子代理会话（`parentSession` 或 `delegationDepth > 0`）也不单独提醒，父会话已汇总。
+
 ---
 
 ## 🏛️ 体系架构
@@ -200,10 +217,10 @@ cd swift
 本项目高度重视工程稳定性，包含两套无外部测试框架依赖的原生测试集：
 
 ```bash
-# 1. 运行插件端自动化测试（336 项测试用例全部通过）
+# 1. 运行插件端自动化测试（448 项，含提醒采集 79 项与提醒端点 33 项）
 node test/run.mjs all
 
-# 2. 运行 Windows 原生端回归测试（507 项测试用例全部通过）
+# 2. 运行 Windows 原生端回归测试（507 项 + 提醒数据层/UI 新增套件）
 cd windows && npm test
 
 # 3. 运行 macOS 原生端测试套件
@@ -215,6 +232,11 @@ cd windows && npm run shots
 # 5. Windows 渲染层性能基准（与仓库基线对比；数字必须同机、同显示模式看）
 cd windows && npm run perf
 ```
+
+> 提醒相关的两套自检可以单独跑：`node test/test-nudge.mjs`（事件语义：`turn/end`
+> 五种 kind 怎么判、工具失败的双判据、审批链必须放行、`userQuestions` 包装必须还原）
+> 与 `node test/test-nudge-bridge.mjs`（`GET /nudges` / `POST /nudge/ack` 的端到端行为）。
+> 分开的理由是：桥起不来时语义层仍然是对的，混在一起会让「哪一层坏了」看不出来。
 
 ---
 

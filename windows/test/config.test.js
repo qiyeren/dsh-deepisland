@@ -112,6 +112,52 @@ check('raw 不同不影响相等判定', C.equalBehavior(a, b) === true);
 const c = { ...C.defaultValue(), notchEnabled: false };
 check('notchEnabled 不同 → 不等', C.equalBehavior(a, c) === false);
 
+console.log('\n=== W10: 提醒配置（nudgeMaxItems）必须穿过 save 白名单 ===');
+// 这条是「静默丢数据」的那一类：save() 会剔掉 WHITELIST 外的键，而岛每次
+// 切显隐/钉住都会 save 一次 —— 少列一个键，用户刚在设置面板调好的提醒
+// 配置就会被随手一点抹掉，且文件里少几个键没有任何报错。
+{
+  const nudgeKeys = ['nudgeEnabled', 'nudgeOnCompleted', 'nudgeOnFailed', 'nudgeOnChoice',
+    'nudgeAlertOnToolError', 'nudgeMuteRanges', 'nudgeMergeWindowMs',
+    'nudgeMaxItems', 'nudgeTtlMinutes'];
+  for (const k of nudgeKeys) {
+    check('白名单含 ' + k, C.WHITELIST.includes(k));
+  }
+  check('插件服务端的 9 个提醒键一个都没漏', nudgeKeys.every((k) => C.WHITELIST.includes(k)));
+
+  // 写回后仍然在文件里（这是 save 真的没有剔掉它们的证据，不是列表里有没有名字）
+  fs.writeFileSync(C.storePath(), JSON.stringify({
+    nudgeMaxItems: 6, nudgeMuteRanges: '22:00-08:00', nudgeEnabled: false,
+  }));
+  C.invalidate();
+  const saved = { ...C.load() };
+  check('save 后 nudgeMaxItems 仍在 raw 里', (() => {
+    C.save(saved);
+    const w = JSON.parse(fs.readFileSync(C.storePath(), 'utf8'));
+    return w.nudgeMaxItems === 6;
+  })(), JSON.stringify(JSON.parse(fs.readFileSync(C.storePath(), 'utf8'))));
+  check('save 后 nudgeMuteRanges / nudgeEnabled 也都在', (() => {
+    const w = JSON.parse(fs.readFileSync(C.storePath(), 'utf8'));
+    return w.nudgeMuteRanges === '22:00-08:00' && w.nudgeEnabled === false;
+  })());
+
+  // 取值校验：1..8 之外退回默认 4（不 clamp 到边上的合法值）
+  // ⚠️ 先删掉配置文件：上一段刚写进 nudgeMaxItems=6，不删的话下面测的是
+  // 「读文件」而不是「文件不存在时的默认值」。
+  try { fs.rmSync(C.storePath(), { force: true }); } catch { /* 没有就算了 */ }
+  C.invalidate();
+  check('配置文件不存在时 nudgeMaxItems 默认 4', C.load().nudgeMaxItems === 4, String(C.load().nudgeMaxItems));
+  for (const [v0, want] of [[6, 6], [1, 1], [8, 8], [0, 4], [99, 4], [-2, 4], ['6', 4], [2.7, 2]]) {
+    fs.writeFileSync(C.storePath(), JSON.stringify({ nudgeMaxItems: v0 }));
+    C.invalidate();
+    check('nudgeMaxItems=' + JSON.stringify(v0) + ' → ' + want + '（非法值退回默认）',
+      C.load().nudgeMaxItems === want, String(C.load().nudgeMaxItems));
+  }
+  check('pickNudgeMaxItems 单独可用（主进程不需要 load 也能校验）',
+    C.pickNudgeMaxItems(5) === 5 && C.pickNudgeMaxItems(undefined) === 4
+      && C.pickNudgeMaxItems(0) === 4);
+}
+
 try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* 无所谓 */ }
 
 console.log('\n通过 ' + pass + ' / 失败 ' + fail);

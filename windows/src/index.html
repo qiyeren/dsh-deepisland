@@ -42,6 +42,7 @@
        data-expanded="0"
        data-live="0"
        data-status="idle"
+       data-nudge="none"
        data-glow="1"
        data-pinned="0">
     <div class="island-clip">
@@ -53,6 +54,10 @@
         <div id="compact" class="compact">
           <span id="c-dot" class="dot"></span>
           <span id="c-title" class="title">DSH 待命</span>
+          <!-- 提醒徽标：?N / !N / ✔N，N 是同类条目的 count 之和。
+               它排在标题之后、胶囊之前 —— 「有人等你」比「在跑什么」
+               优先，但标题本身不能被挤掉（用户仍要知道是哪个会话）。 -->
+          <span id="c-nudge" class="chip nudge-badge is-off"></span>
           <span id="c-chip" class="chip is-off"></span>
           <span id="c-gauge" class="gauge is-off"></span>
           <span id="c-elapsed" class="gauge elapsed mono is-off"></span>
@@ -80,6 +85,11 @@
             <span id="todo-cur" class="cur"></span>
             <span id="todo-prog" class="prog mono"></span>
           </div>
+
+          <!-- 提醒区块（融合自 dsh-nudge 的三种时刻）：任务完成 / 需要你选择 /
+               执行失败。列表为空时整块 is-off —— 空板比空白更像 bug。
+               行结构：类色条 + 标题 + 明细 + 时间（+ 合并次数）。 -->
+          <div id="nudges" class="nudges is-off"></div>
 
           <div id="list" class="list"></div>
           <div id="stats" class="stats"></div>

@@ -56,6 +56,7 @@ process.on('exit', (code) => trace('[trace] process exit code=' + code));
 const config = require('./config.js');
 const { SessionMonitor } = require('./monitor.js');
 const bridge = require('./bridge.js');
+const nudges = require('./nudges.js');
 const { performJump } = require('./jump.js');
 // 快照协议是纯函数模块（无 electron 依赖），可直接被 node 单测 —— 见 snapshot.js。
 const { buildSnapshot, nextDelay } = require('./snapshot.js');
@@ -124,6 +125,31 @@ let bridgeState = { ok: false, port: bridge.FALLBACK_PORT, plugin: null };
 let lastJump = null;       // { kind, brief, at }
 let requestedHidden = false;
 let forceShow = false;     // 仅冒烟模式用：无条件显示
+
+// ── 提醒（nudge 融合）状态 ──
+/**
+ * 当前要送进快照的提醒条目（已按 nudgeMaxItems 截断）。
+ *
+ * ⚠️ **引用本身就是去重依据**：服务端 rev 没变时这里不换引用，
+ * 快照的 rev 因此不会变 —— 这是「同一份提醒不重渲染」的落点，不是巧合。
+ */
+let nudgeItems = [];
+/**
+ * 上一次拿到的**服务端** rev。相同就完全跳过（连截断都不做）。
+ *
+ * 与快照的 rev 是两码事：那个是「整份 DTO 的内容指纹」，这个是「提醒队列
+ * 自己的版本号」（服务端按 id+count+ts 算）。拿它做第一道闸，省掉每 2 秒
+ * 一次的重建与重渲染。
+ */
+let nudgeRev = '';
+/**
+ * 提醒拉取失败时的降噪键（`reason`）。
+ *
+ * 桥没起的时候这个分支每 2 秒就会被走到一次；每次都 `console.warn` 会让
+ * 日志彻底失去可读性。同一个 reason 只记一次，恢复成功时清空 —— 下一次
+ * 失败才会重新记，这正是「连续失败不刷屏、但新故障必须看得见」。
+ */
+let nudgeWarnKey = '';
 
 // ── 快照 / 轮询状态（v2）──
 /** 最近一拍组装好的 DTO。窗口显隐判断与冒烟输出都读它，不再解析 JSON 字符串。 */
@@ -617,6 +643,74 @@ function stopCursorWatch() {
 // ───────────────────────────── 轮询 ─────────────────────────────
 
 /**
+ * 提醒队列的一拍拉取（挂在既有 2s 探桥闸门里，**没有自己的定时器**）。
+ *
+ * ## 两道闸，各自省掉不同的事
+ *
+ * 1. **服务端 rev 相同** → 整段跳过。省的是「每 2 秒重建一份 items 数组」
+ *    以及随之而来的重渲染：`rev` 由 id+count+ts 算，内容没变时它不变，
+ *    而截断（nudgeMaxItems）是个纯函数 —— 重算一遍结果必然相同。
+ * 2. **快照 rev 相同** → main 的 tick 里本来就不会 send。这条是白拿的，
+ *    但前提是「引用真的没换」：所以第 1 条命中时**必须原样保留** nudgeItems，
+ *    而不是重新赋一个内容相同的新数组（否则快照 rev 每次都变，2 秒推一跳）。
+ *
+ * ## 为什么失败只记一次
+ *
+ * 桥没起的时候这个分支每 2 秒都会被走到。每次都 warn 会让日志彻底失去可读性，
+ * 而「日志里什么都没有」又会让人以为提醒功能根本没实现 —— 所以按 reason
+ * 去重：同一个错误只留一行，恢复成功时清空键，下一次失败重新记。
+ *
+ * @param {object} cfg 本拍 config.load() 的结果（nudgeMaxItems 取在这里）
+ */
+function probeNudges(cfg) {
+  nudges.fetchNudges().then((r) => {
+    if (!r.ok) {
+      const key = r.reason || 'unknown';
+      if (nudgeWarnKey !== key) {
+        nudgeWarnKey = key;
+        console.warn('[dsh-notch] 提醒拉取失败（' + key + '）：后续同类错误不再重复记录');
+      }
+      // 桥暂时不可用 ≠ 提醒已被处理：保留本地列表，别让界面无端清空。
+      return;
+    }
+    nudgeWarnKey = '';
+    // 服务端 rev 没变：什么都不做（见函数头第 1 条）。
+    if (r.rev === nudgeRev) return;
+
+    // 条数上限来自配置（插件设置面板的「一屏几条」）。config.load() 已经把
+    // 它收进顶层字段并做了 1..8 的取值校验，这里不再 clamp 第二遍 ——
+    // 两处各 clamp 一次，将来口径一变必然分叉（一处改一处不改）。
+    const max = cfg.nudgeMaxItems;
+    // 按严重度升序（越小越该先处理），同档按时间倒序（新的在前）。
+    // 服务端已排过序，这里再排一次是因为**截断发生在 app 侧**：maxItems 只
+    // 留前 N 条，拿错顺序留下的就是最不重要的那几条。
+    const items = r.items
+      .slice()
+      .sort((a, b) => (a.severity - b.severity) || (b.ts - a.ts))
+      .slice(0, max);
+
+    const nextRev = r.rev;
+    const same = (items.length === nudgeItems.length)
+      && items.every((it, i) => {
+        const old = nudgeItems[i];
+        return old && old.id === it.id && old.count === it.count
+          && old.ts === it.ts && old.detail === it.detail;
+      });
+    nudgeRev = nextRev;
+    if (same) return;              // 内容一致：保住旧引用，不让快照 rev 抖
+
+    nudgeItems = items;
+    poke();                        // 立刻补一拍：提醒是事件，不该等最多 1 秒
+  }).catch((e) => {
+    const key = 'exception';
+    if (nudgeWarnKey !== key) {
+      nudgeWarnKey = key;
+      console.warn('[dsh-notch] 提醒拉取异常：' + (e && e.message));
+    }
+  });
+}
+
+/**
  * 组装一拍快照。纯映射（字段白名单、rev、体积）全在 snapshot.js ——
  * 这里只负责取数据，这样协议部分可以用 node 直接单测。
  *
@@ -627,7 +721,7 @@ function takeSnapshot(cfg, now) {
   // 回执到点就清掉：rev 去重下，「该消失了」没有别的东西会触发推送。
   if (lastJump && now - lastJump.at > JUMP_HOLD_MS) lastJump = null;
   const entries = monitor ? monitor.poll(now, tickIndex) : [];
-  return buildSnapshot({ entries, config: cfg, bridge: bridgeState, jump: lastJump, now });
+  return buildSnapshot({ entries, nudges: nudgeItems, config: cfg, bridge: bridgeState, jump: lastJump, now });
 }
 
 /** 当前 tick 函数（startLoop 里赋值）。poke() 用它把等待中的下一拍提前。 */
@@ -701,6 +795,10 @@ function startLoop() {
     // 250/1000ms 之间变，按下标算会让空闲时变成 8s 才探一次。
     if (now - lastBridgeProbeAt >= BRIDGE_PROBE_MS) {
       lastBridgeProbeAt = now;
+      // 提醒与桥健康探测**共用这一个 2s 闸门**（契约 §7 明令禁止新增常驻
+      // 高频定时器）：它们打的是同一个回环服务，同一个节拍足够 —— 提醒的
+      // 时效要求本来就是「秒级」，不是「帧级」。
+      probeNudges(cfg);
       bridge.health().then((r) => {
         // 判定要不要刷托盘菜单：pending 也要算进去。
         // 只比 ok/port 的话，「0 条待处理 → 1 条待处理」不会触发刷新，
@@ -829,9 +927,15 @@ function applyVisibility(cfg) {
 
   // 空闲收起：一个活跃会话都没有时把岛藏起来（macOS 的 idleHide 同义）。
   // 直接用 DTO 的 live（= status !== 'idle'），不再解析 JSON 字符串。
+  //
+  // ⚠️ **有待处理提醒时不藏**：提醒最常见的时刻恰恰是「会话刚结束」（完成 /
+  // 失败都是回合末尾），而那时 live 已经为 false —— 按老口径岛会在提醒到达
+  // 的同一拍被藏起来，徽标永远没人看见。提醒是「该你处理了」，它比「空闲
+  // 就收起」优先。
   if (c.idleHide) {
     const entries = (lastPayload && lastPayload.entries) || [];
-    if (!entries.some((e) => e && e.live === true)) { hideWindow(); return; }
+    const nudges = (lastPayload && lastPayload.nudges) || [];
+    if (!nudges.length && !entries.some((e) => e && e.live === true)) { hideWindow(); return; }
   }
   if (!win.isVisible()) {
     win.show();
@@ -868,6 +972,47 @@ ipcMain.handle('island:jump', async (_e, payload) => {
   // 那种「清空去重状态」的技巧 —— 回执内容本身就变了。
   poke();
   return { ok: outcome.isSuccess, brief: outcome.brief, kind: outcome.kind };
+});
+
+/**
+ * 用户点了（处理过）一条提醒 → 通知服务端移除。
+ *
+ * ## 为什么本地也要立刻删
+ *
+ * 服务端是真相源，但它的下一次拉取最多要等 2 秒。用户的动作是「我点过了」，
+ * 那条提醒必须当场消失 —— 否则会出现「点了，它还挂在原地」这种最伤信任的
+ * 反馈。所以：**先本地移除 + poke（立刻重渲染），再让服务端慢慢同步**。
+ *
+ * 万一服务端 ack 失败（桥刚好重启），下一拍拉取还会把它拉回来 —— 界面上
+ * 表现为「它又出现了」。这比「假装删掉、服务端其实还在」好：后者用户永远
+ * 点不掉，而且没有任何线索。
+ *
+ * `nudgeRev` 在列表清空时置空：清空意味着「本地与服务端暂时不一致」，
+ * 置空强制下一拍把服务端那份重新拉一遍（而不是靠 rev 相等跳过）。
+ */
+ipcMain.handle('island:nudge-ack', async (_e, payload) => {
+  const p = (payload && typeof payload === 'object') ? payload : {};
+  const ids = Array.isArray(p.ids)
+    ? p.ids.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim())
+    : [];
+  if (!ids.length) return { ok: false, remaining: nudgeItems.length };
+
+  // 先在本地移除（含 count 累加型重复：同 id 只算一条）
+  nudgeItems = nudgeItems.filter((it) => !ids.includes(it.id));
+
+  const r = await nudges.ack(ids);
+  if (r.ok) {
+    nudgeWarnKey = '';
+  } else if (nudgeWarnKey !== 'ack') {
+    nudgeWarnKey = 'ack';
+    console.warn('[dsh-notch] 提醒确认失败（' + (r.reason || 'unknown') + '）：本地已移除，下次拉取会同步');
+  }
+
+  // 列表空了就把 rev 清掉：下一拍重新拉一遍服务端，把「不是本地删的」
+  // （比如服务端又新增了别的）拿回来，而不是因为 rev 相同整段跳过。
+  if (!nudgeItems.length) nudgeRev = '';
+  poke();
+  return { ok: r.ok, remaining: nudgeItems.length };
 });
 
 /**

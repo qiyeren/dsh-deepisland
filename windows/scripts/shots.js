@@ -143,14 +143,18 @@ function entry(o) {
   return e;
 }
 
-/** 组装 v2 快照：{v, rev, entries, config, bridge, jump, serverNow}。 */
-function snap(name, entries) {
+/** 组装 v2 快照：{v, rev, entries, config, bridge, jump, nudges, serverNow}。 */
+function snap(name, entries, nudges) {
   const content = {
     v: 2,
     entries,
     config: cfg(),
     bridge: { ok: true, port: 47311, pending: 0 },
     jump: null,
+    // 提醒区（融合自 dsh-nudge）。缺省空数组而不是省略字段 —— 与真实
+    // buildSnapshot 的口径一致（字段恒在、类型稳定），否则截图里的 UI
+    // 与线上是两种形状，图就白拍了。
+    nudges: Array.isArray(nudges) ? nudges : [],
   };
   return {
     v: 2,
@@ -160,7 +164,28 @@ function snap(name, entries) {
     config: content.config,
     bridge: content.bridge,
     jump: content.jump,
+    nudges: content.nudges,
     serverNow: Date.now(),
+  };
+}
+
+/**
+ * 合成一条提醒：字段与 `src/snapshot.js` 的 `nudgesDto()` 白名单逐一对应。
+ *
+ * 刻意不喂 `sessionId` 之外的东西（真实 DTO 里也没有 `atMs`/`ts` —— 那两个
+ * 是服务端的内部字段，进快照前就被砍掉了）。截图里出现线上没有的字段，
+ * 是在给下一个人制造错误的形状记忆。
+ */
+function nudge(o) {
+  return {
+    id: o.id,
+    kind: o.kind,
+    severity: o.severity === undefined ? ({ needs_choice: 0, failed: 1, completed: 2 })[o.kind] : o.severity,
+    sessionId: o.sessionId || 'session-a1b2c3d4',
+    label: o.label,
+    detail: o.detail || '',
+    at: o.at || '19:42',
+    count: o.count === undefined ? 1 : o.count,
   };
 }
 
@@ -275,6 +300,70 @@ const SCENES = [
       }),
     ]),
   },
+  {
+    // 提醒区（融合自 dsh-nudge）：一条「待你选择」+ 一条「失败」+ 一条「完成」。
+    // 三条一起才看得出「按严重度排序」与「三种类别色」是不是真的生效 ——
+    // 只拍一条的话，色条与排序对不对根本检不出来。
+    // 悬停展开（hover:true）：提醒不自动展开 HUD（那是刻意的不打扰），
+    // 所以这里必须用合成的悬停事件，否则拍到的是折叠态。
+    name: 'hud-nudges',
+    title: '展开态 · 岛体提醒（融合 dsh-nudge）',
+    hover: true,
+    snap: () => snap('hud-nudges', [
+      entry({
+        id: 'session-aaaa1111', label: 'AlexNet 架构可视化',
+        status: 'thinking', tag: 'Thinking', glow: '#4E7CFF',
+        actionText: '深度思考中...', elapsedMs: 42_000, elapsedText: '00:42', turnStepText: 'T3·S7',
+        contextText: '32%', contextFraction: 0.32,
+        todoText: '2/5', todoDone: 2, todoTotal: 5, todoCurrent: '补齐训练曲线渲染',
+      }),
+    ], [
+      nudge({
+        id: 'needs_choice::session-bbbb2222::7', kind: 'needs_choice',
+        sessionId: 'session-bbbb2222', label: 'Music Region 地图模块',
+        detail: '等待你批准一个操作：执行 rm -rf build/cache', at: '19:40',
+      }),
+      nudge({
+        id: 'failed::session-cccc3333::6', kind: 'failed',
+        sessionId: 'session-cccc3333', label: '盐碱地决策系统',
+        detail: '工具调用失败：磁盘空间不足，写入 tile 缓存时中断', at: '19:38', count: 3,
+      }),
+      nudge({
+        id: 'completed::session-dddd4444::5', kind: 'completed',
+        sessionId: 'session-dddd4444', label: '周报生成脚本',
+        detail: '回合已完成', at: '19:31',
+      }),
+    ]),
+  },
+  {
+    // 折叠态 + 有提醒：验证 `#c-nudge` 徽标（符号 + 计数之和）。
+    //
+    // ⚠️ **必须排在所有 hover:true 场景之后**。悬停展开是靠合成 mousemove
+    // 触发的，而 `state.overIsland` 一旦为真、后面又没有「移出岛」的事件，
+    // 后继场景会**继承上一个场景的悬停状态**、被拍成展开态 ——
+    // 实测踩过：这张本意是折叠态，拍出来是 952×402 的展开图。
+    // 放在最后，这个泄漏就只影响不到任何画面。
+    name: 'compact-nudge',
+    title: '折叠态 · 有提醒时的徽标',
+    snap: () => snap('compact-nudge', [entry({
+      label: 'AlexNet 架构可视化',
+      status: 'thinking', tag: 'Thinking', glow: '#4E7CFF',
+      actionText: '深度思考中...',
+      elapsedMs: 42_000, elapsedText: '00:42', turnStepText: 'T3·S7',
+      contextText: '32%', contextFraction: 0.32,
+    })], [
+      nudge({
+        id: 'needs_choice::session-bbbb2222::7', kind: 'needs_choice',
+        sessionId: 'session-bbbb2222', label: 'Music Region 地图模块',
+        detail: '等待你批准一个操作', at: '19:40',
+      }),
+      nudge({
+        id: 'failed::session-cccc3333::6', kind: 'failed',
+        sessionId: 'session-cccc3333', label: '盐碱地决策系统',
+        detail: '工具调用失败：磁盘空间不足', at: '19:38', count: 2,
+      }),
+    ]),
+  },
 ];
 
 // ───────────────────────── 截图流程 ─────────────────────────
@@ -297,22 +386,75 @@ async function measureIsland(win) {
   })()`);
 }
 
+/**
+ * 轮询等渲染层真的进入展开态。
+ *
+ * 判据是渲染层自己写的 `data-expanded`（`renderer.js` 的 setAttr 是唯一写入方），
+ * 不是量高度 —— 量高度拿到的可能是弹簧动画中间帧，而 `data-expanded` 是
+ * 「已经决定展开」这个事实本身。
+ *
+ * @param {any} win BrowserWindow
+ * @param {number} timeoutMs 最长等待
+ * @returns {Promise<{ok: boolean, value: string}>}
+ */
+async function waitExpanded(win, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let value = '';
+  while (Date.now() < deadline) {
+    value = await win.webContents.executeJavaScript(
+      `String(document.getElementById('island').getAttribute('data-expanded'))`);
+    if (value === '1') return { ok: true, value };
+    await sleep(100);
+  }
+  return { ok: false, value };
+}
+
 async function shootScene(win, scene) {
+  // 0. **先把上一个场景的悬停/展开状态清掉**，再推新快照。
+  //
+  // 为什么必须有这一步（实测踩过）：悬停展开是靠合成 mousemove 触发的，而
+  // 渲染层的 `state.overIsland` / `state.expanded` 只有收到「移出」事件才会
+  // 变回 false。截图流程里每个场景是独立的一次 send，**不会**有移出事件 ——
+  // 于是上一个 hover:true 场景留下的 overIsland=true 会泄漏到下一个场景，
+  // 把它拍成展开态（实测：一张本意是折叠态的图拍出来是 952×402）。
+  //
+  // 早先的规避写法是「把非 hover 场景排到 hover 场景之前」—— 那是靠**排列
+  // 顺序**躲 bug，加一个场景就会再次踩中（这一轮就踩了两次）。正确做法是
+  // 每个场景自己重置，顺序从此无关。
+  //
+  // 用一个**离岛很远**的坐标广播 mousemove：命中判定与外扩热区都基于岛体
+  // 当前矩形，坐标落在窗口外必然判为「不在岛上」。
+  await win.webContents.executeJavaScript(
+    `document.dispatchEvent(new MouseEvent('mousemove', { clientX: -100, clientY: -100 }))`);
+
   // 1. 推合成快照（renderer.js 的 onSnapshot 会立刻重画；rev 每个场景不同）
   win.webContents.send('island:snapshot', scene.snap());
   await sleep(700);   // 跨过 340ms 宽/高/圆角弹簧 + 140ms 模式交叉淡化
 
-  // 2. 悬停展开：合成 mousemove 落到岛心（穿透窗口只认转发事件，同冒烟测试）
+  // 2. 悬停展开：合成 mousemove 落到岛心，然后**等到渲染层真的展开了**再截图。
+  //
+  // 为什么不能只 `sleep(250) + sleep(800)` 蒙时延（实测踩过）：
+  // 收起与展开是两条独立的定时器（HOVER_CLOSE_MS=350 / HOVER_OPEN_MS=200），
+  // 上一个场景刚被第 0 步置成「离开」，那条 350ms 的收起定时器还在跑；
+  // 新场景的鼠标进来时两个定时器互相打断，展开完成的时刻**不是固定值**。
+  // 蒙一个 sleep 就有概率拍到折叠态（症状：hud-* 偶尔变成 840×128）。
+  // 所以改成「轮询 `#island` 的 data-expanded 直到为 1」，拿到的是**事实**。
   if (scene.hover) {
     const box = await measureIsland(win);
     const cx = Math.round(box.x + box.w / 2);
     const cy = Math.round(box.y + box.h / 2);
     await win.webContents.executeJavaScript(
       `document.dispatchEvent(new MouseEvent('mousemove', { clientX: ${cx}, clientY: ${cy} }))`);
-    await sleep(250);   // 跨过 200ms 驻留门槛
+    // 驻留门槛 200ms 之后才可能展开；先等过它，再轮询断言
+    await sleep(260);
     await win.webContents.executeJavaScript(
       `document.dispatchEvent(new MouseEvent('mousemove', { clientX: ${cx}, clientY: ${cy + 6} }))`);
-    await sleep(800);   // 等 340ms 高度弹簧 + 170ms 分层入场走完
+    const expanded = await waitExpanded(win, 5000);
+    if (!expanded.ok) {
+      console.log(`[shots] ⚠️  ${scene.name}: 悬停后 HUD 未展开（data-expanded=${expanded.value}），`
+        + '这张图拍到的可能是折叠态');
+    }
+    await sleep(800);   // 等 340ms 高度弹簧 + 170ms 分层入场走完（这段是纯动画，无需断言）
   }
 
   // 3. 量岛体实际矩形，外扩 MARGIN 圈住光晕，按窗口边界钳制后裁剪截图

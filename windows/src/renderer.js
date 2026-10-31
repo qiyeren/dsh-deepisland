@@ -97,6 +97,15 @@
     /** 会话行 / 统计项的节点缓存（增量更新的依据）。 */
     rows: new Map(),
     stats: new Map(),
+    /**
+     * 提醒（融合自 dsh-nudge）。元素形状 = 契约 §2.1 的八字段 DTO。
+     *
+     * 它是快照的一部分，所以 rev 变化时才更新 —— 提醒条目的增删本身就让
+     * 快照 rev 变，不需要渲染层再自己轮询什么。
+     */
+    nudges: [],
+    /** 提醒行的节点缓存（与 rows 同一套增量复用纪律，按 id 复用）。 */
+    nudgeRows: new Map(),
   };
 
   /* ───────────────────────────── 差异写 DOM 的小工具 ─────────────────────────────
@@ -141,6 +150,56 @@
   /* ───────────────────────────── 纯函数 ───────────────────────────── */
 
   const GLOW_IDLE = '#50505A';
+
+  /**
+   * 三类提醒的展示口径（契约 §2.2）。
+   *
+   * 颜色只在这里出现一次：CSS 侧定义 `--nudge-choice` / `--nudge-failed` /
+   * `--nudge-done` 三个变量，这里只引用变量名 —— 两份十六进制色值必然会
+   * 在某个改动里分叉，而表现只是「徽标和色条不是一个颜色」，很难被当成
+   * bug 报上来。
+   */
+  const NUDGE_META = {
+    needs_choice: { glyph: '?', cls: 'choice', var: '--nudge-choice' },
+    failed: { glyph: '!', cls: 'failed', var: '--nudge-failed' },
+    completed: { glyph: '✔', cls: 'done', var: '--nudge-done' },
+  };
+
+  /**
+   * 三类提醒的 `--glow` 覆盖色（契约 §2.2 写死的值）。
+   *
+   * 这里必须给真色值而不是变量：`--glow` 是「主会话状态色」，它是 CSS 里
+   * 所有派生色（内发光带、外发光、胶囊底、焦点环）的共同源头，只能吃一个
+   * 颜色，吃不了三份。而 `var()` 在 inline `style.setProperty` 里也能用 ——
+   * 用变量名同样可行，只是牌面上少一层间接，值仍只有一个来源。
+   */
+  const NUDGE_GLOW = { choice: '#F5A623', failed: '#E74C3C' };
+
+  /** 提醒类别按严重度排序（越小越该先处理），同档新的在前。 */
+  function nudgeKindOf(list) {
+    if (!Array.isArray(list) || !list.length) return 'none';
+    let best = null;
+    for (const n of list) {
+      if (!n || typeof n !== 'object') continue;
+      const meta = NUDGE_META[n.kind];
+      if (!meta) continue;
+      const sev = typeof n.severity === 'number' ? n.severity : 2;
+      if (best === null || sev < best.sev) best = { sev, kind: n.kind };
+    }
+    if (!best) return 'none';
+    if (best.kind === 'needs_choice') return 'choice';
+    if (best.kind === 'failed') return 'failed';
+    return 'done';
+  }
+
+  /** 同一类提醒的条数之和（契约 §2.2：N 是条目 count 之和，不是条目数）。 */
+  function nudgeCountOf(list, kind) {
+    let n = 0;
+    for (const it of list) {
+      if (it && it.kind === kind) n += (typeof it.count === 'number' && it.count > 0) ? it.count : 1;
+    }
+    return n;
+  }
 
   function isLive(status) {
     return !!status && status !== 'idle';
@@ -199,9 +258,17 @@
    * 「等待确认」自动展开的理由：这一档状态的意义就是「需要人」，折叠态
    * 只有一行摘要撑不起它的分量；展开成 HUD 把等待行怼到眼前，用户才不会
    * 一直晾着 DSH。与 macOS 版行为一致。
+   *
+   * ⚠️ **提醒绝不自动展开**（契约 §4.3）：用户可能在全屏操作，为一条「任务
+   * 完成」把 243px 的面板怼到屏幕上就是打断。它在折叠条上显示徽标，悬停
+   * （expandOnHover）才看到明细 —— 那一档本来就是用户自己的动作。
+   *
+   * 提醒只参与**空板判定**：没有会话但有待处理提醒时，悬停仍该展开 ——
+   * 否则折叠条那一个 `?1` 徽标点开什么都没有，信息断层。注意它只影响
+   * 「什么算空板」，不是一条展开理由（几条 return true 里都没有它）。
    */
   function shouldExpand() {
-    if (!state.entries.length) return false;   // 没会话时展开只会是一块空板
+    if (!state.entries.length && !state.nudges.length) return false;
     if (state.pinned) return true;
     if (state.primary && state.primary.status === 'waiting') return true;
     return config().expandOnHover && state.overIsland;
@@ -228,8 +295,20 @@
     const entries = Array.isArray(snap.entries) ? snap.entries : [];
     state.entries = entries;
     state.primary = entries.length ? entries[0] : null;
+    // 快照里的 nudges 恒是数组（snapshot.js 保证空列表仍是 []），但**渲染层
+    // 照样兜一层**：契约要求「字段缺失 ↔ 空数组」不抖动，而兜底是这条
+    // 纪律在渲染侧的落点（旧主进程不发这个字段时界面就是「没有提醒」）。
+    state.nudges = Array.isArray(snap.nudges) ? snap.nudges : [];
 
-    const glow = (state.primary && state.primary.glow) || GLOW_IDLE;
+    // 主会话状态色。提醒只**覆盖**它，不另起一份：岛上的光、点、胶囊底、
+    // 焦点环全部派生自 --glow，多一份「提醒色」变量必然在某一处对不上。
+    const status = state.primary ? state.primary.status : 'idle';
+    const nudgeTone = nudgeKindOf(state.nudges);
+    let glow = (state.primary && state.primary.glow) || GLOW_IDLE;
+    if (nudgeTone === 'choice') glow = NUDGE_GLOW.choice;
+    else if (nudgeTone === 'failed' && status !== 'waiting') glow = NUDGE_GLOW.failed;
+    // 等待确认时不动 --glow：那一档本来就有自己的琥珀心跳，再叠一层红会让
+    // 「等人」和「失败」在颜色上混成一个，而它们的处理动作完全不同。
     if (state.lastGlow !== glow) {
       setCssVar(root, '--glow', glow);
       state.lastGlow = glow;
@@ -279,9 +358,10 @@
     setAttr(island, 'data-expanded', expanded ? '1' : '0');
     setAttr(island, 'data-status', status);
     setAttr(island, 'data-live', isLive(status) ? '1' : '0');
+    setAttr(island, 'data-nudge', nudgeKindOf(state.nudges));
     setAttr(island, 'data-glow', cfg.glowEffect ? '1' : '0');
     setAttr(island, 'data-pinned', state.pinned ? '1' : '0');
-    setAttr(island, 'aria-label', ariaLabel(primary, entries));
+    setAttr(island, 'aria-label', ariaLabel(primary, entries, state.nudges));
 
     setText($('pinned-hint'), state.pinned ? '已钉住 · 点状态行取消' : '');
     setHidden($('pinned-hint'), !state.pinned);
@@ -297,7 +377,23 @@
     queuePointerRecheck();
   }
 
-  function ariaLabel(primary, entries) {
+  function ariaLabel(primary, entries, nudges) {
+    // 提醒优先：它才是「这回真需要你」的那条信息 —— 读屏用户听到
+    // 「3 个会话在跑」却漏掉「等你确认一件事」，等于这个标签没起作用。
+    const list = Array.isArray(nudges) ? nudges : [];
+    if (list.length) {
+      const tone = nudgeKindOf(list);
+      const meta = tone === 'choice' ? NUDGE_META.needs_choice
+        : tone === 'failed' ? NUDGE_META.failed
+          : tone === 'done' ? NUDGE_META.completed : null;
+      if (meta) {
+        const n = list.reduce((acc, it) => acc
+          + ((typeof it.count === 'number' && it.count > 0) ? it.count : 1), 0);
+        const head = list[0];
+        const what = (head && (head.label || head.detail)) || '';
+        return 'DSH 灵动岛：' + meta.glyph + n + ' 条提醒' + (what ? '，' + what : '');
+      }
+    }
     if (!primary) return 'DSH 灵动岛：没有活跃会话';
     const tag = primary.badge || primary.tag || '';
     const name = primary.label || primary.shortId || '';
@@ -305,11 +401,46 @@
     return 'DSH 灵动岛：' + tag + ' ' + name + count;
   }
 
+  /* ───────────── 折叠态提醒徽标（契约 §2.2） ─────────────
+   *
+   * 徽标取「最严重那一类」的符号 + **该类条目 count 之和**，不是条目条数：
+   * 服务端把 1.2s 合并窗口内的同 (kind, sessionId) 事件累加进 count，
+   * 拿条数当 N 会把「同一件事被合并了 3 次」显示成「3 件事」。
+   *
+   * 只显示一类而不是三类并列：折叠态只有 380px 宽，四个节点（点/标题/
+   * 徽标/胶囊/仪表/耗时）已经排满；三类并列必然把标题挤成省略号，而标题
+   * 是「是哪个会话」的唯一线索。
+   */
+  function renderNudgeBadge(list) {
+    const badge = $('c-nudge');
+    const tone = nudgeKindOf(list);
+    if (tone === 'none') { setHidden(badge, true); setText(badge, ''); return; }
+
+    const kind = tone === 'choice' ? 'needs_choice' : tone === 'failed' ? 'failed' : 'completed';
+    const meta = NUDGE_META[kind];
+    const n = nudgeCountOf(list, kind);
+    setText(badge, meta.glyph + n);
+    setHidden(badge, false);
+    setClass(badge, 'choice', meta.cls === 'choice');
+    setClass(badge, 'failed', meta.cls === 'failed');
+    setClass(badge, 'done', meta.cls === 'done');
+    setAttr(badge, 'data-kind', kind);
+    setAttr(badge, 'aria-label', kindLabel(kind) + ' ' + n + ' 条');
+  }
+
+  /** 类别 → 中文标签。文案与服务端 KIND_LABEL 一致，改一处要同步两处。 */
+  function kindLabel(kind) {
+    if (kind === 'needs_choice') return '待你选择';
+    if (kind === 'failed') return '执行失败';
+    return '已完成';
+  }
+
   /* ───────────── 折叠态：一条信息带（Mac compactRow 口径） ───────────── */
 
   function renderCompact(entries, primary) {
     setCssVar($('c-dot'), '--dot', (primary && primary.glow) || GLOW_IDLE);
     setText($('c-title'), primary ? (primary.label || primary.shortId || '会话') : '没有活跃会话');
+    renderNudgeBadge(state.nudges);
 
     // 胶囊位：多会话 → 在跑/总数（Mac rectangle.stack.fill）；
     // 单会话 → 子代理数（Mac person.2.fill）或工具标签。
@@ -410,8 +541,116 @@
     }
 
     renderRows(multi ? entries : []);
+    renderNudges(state.nudges);
     renderStats(primary);
     renderFooter();
+  }
+
+  /* ───────────── 提醒区块（融合 dsh-nudge 的三种时刻） ─────────────
+   *
+   * ## 为什么行不参与 ↑/↓ 选行
+   *
+   * HUD 的键盘导航（↑/↓ 选行、Enter 跳转）是为**会话行**设计的：
+   * focusIndex 是 `state.entries` 的下标，Enter 走的是 jumpTo(entry)。
+   * 提醒行若要并进去，就得再造一套「焦点指向哪一类」的索引，而两套索引
+   * 一旦不一致，用户按 Enter 会跳到反的会话 —— 这个错非常难自查。
+   *
+   * 所以提醒行**只响应点击**（契约 §2.2 的原话），键盘路径一行不动。
+   * 代价是键盘用户点不到提醒；补偿是折叠徽标 + aria-label 已经把这件
+   * 事说出来了，而提醒本来就是「看到再点」的交互，不是批量操作。
+   *
+   * ## 行结构
+   *
+   * `.nudge[data-id]` > `.nudge-bar`（类色条）+ `.nudge-label` +
+   * `.nudge-detail` + `.nudge-at.mono`（+ `×N`）。字段全部来自 DTO，
+   * 渲染层不做任何 fallback（契约 §2.1：label 已在主进程算好 title || shortId）。
+   */
+  function createNudgeRow(id) {
+    const node = document.createElement('div');
+    node.className = 'nudge';
+    node.setAttribute('data-id', id);
+    node.setAttribute('tabindex', '-1');
+    const bar = document.createElement('span');
+    bar.className = 'nudge-bar';
+    const label = document.createElement('span');
+    label.className = 'nudge-label';
+    const detail = document.createElement('span');
+    detail.className = 'nudge-detail';
+    const at = document.createElement('span');
+    at.className = 'nudge-at mono';
+    node.append(bar, label, detail, at);
+    return { node, bar, label, detail, at };
+  }
+
+  function updateNudgeRow(row, item) {
+    const kind = item.kind;
+    const meta = NUDGE_META[kind] || NUDGE_META.completed;
+    setAttr(row.node, 'data-kind', kind);
+    setAttr(row.node, 'aria-label',
+      kindLabel(kind) + '：' + (item.label || '') + (item.sessionId ? '（点击跳转）' : ''));
+    setText(row.label, item.label || '');
+    setHidden(row.label, !item.label);
+    setText(row.detail, item.detail || '');
+    setHidden(row.detail, !item.detail);
+    // `at` 是服务端算好的 HH:MM（本地时钟口径不同，不能在渲染层重算 ——
+    // 重算会把「21:03 收到」显示成「21:05」，那是另一台机器的钟）。
+    const atText = item.at || '';
+    const count = (typeof item.count === 'number' && item.count > 1) ? ' ×' + item.count : '';
+    setText(row.at, atText + count);
+    setHidden(row.at, !atText && !count);
+  }
+
+  function renderNudges(list) {
+    const host = $('nudges');
+    // 渲染层**不再截断**：条数上限来自配置（nudgeMaxItems，1..8），已由主进程
+    // 按它裁过一次。这里再写一个 4 会与配置打架 —— 用户把它调到 6，界面却只
+    // 显示 4 条，而「为什么少了两条」在界面上没有任何线索。
+    const items = Array.isArray(list) ? list : [];
+    setHidden(host, items.length === 0);
+
+    const keep = new Set(items.map((it) => it && it.id).filter(Boolean));
+    for (const [id, row] of state.nudgeRows) {
+      if (!keep.has(id)) { row.node.remove(); state.nudgeRows.delete(id); }
+    }
+    items.forEach((item, i) => {
+      if (!item || !item.id) return;
+      let row = state.nudgeRows.get(item.id);
+      if (!row) { row = createNudgeRow(item.id); state.nudgeRows.set(item.id, row); }
+      updateNudgeRow(row, item);
+      const current = host.children[i];
+      if (current !== row.node) host.insertBefore(row.node, current || null);
+    });
+  }
+
+  /**
+   * 点一条提醒：**先跳会话，再确认**（契约 §2.2 的顺序）。
+   *
+   * 顺序不能反：ack 会把它从快照里移除，行随即消失 —— 若此时 jump 还没
+   * 发出去，用户看到的是「行没了，但 DSH 没切过去」，而他会以为点错了。
+   * 先跳，用户看到 DSH 真的切过去，行再消失，因果链是清楚的。
+   *
+   * 失败也照样 ack：跳不进去（桥没起 / 会话已关）不该让提醒永远挂在岛上
+   * —— 那样用户只能反复点同一行。跳转的失败回执已经由 jump 自己的路径
+   * 显示（页脚 + 头部提示），提醒该退出舞台。
+   */
+  function handleNudgeClick(item) {
+    if (!item) return;
+    const id = item.sessionId || '';
+    if (id) {
+      window.island.jump({ id, label: item.label || '' }).catch(() => { /* 主进程已记日志 */ });
+    }
+    window.island.nudgeAck({ ids: [item.id] }).then((r) => {
+      // 主进程已经做了本地移除 + poke，这里只在本拍拿不到快照时兜一层：
+      // 直接按 id 从本地列表移除并重渲染，界面立刻反映（不依赖下一拍）。
+      state.nudges = state.nudges.filter((n) => n.id !== item.id);
+      render();
+      if (r && r.ok === false) {
+        state.dshHint = '提醒已在本地移除，桥恢复后会同步';
+        clearTimeout(state.dshTimer);
+        state.dshTimer = setTimeout(() => { state.dshHint = null; render(); }, RESULT_HOLD_MS);
+        updateHint();
+      }
+    }).catch(() => { /* 同上 */ });
   }
 
   /* ───────────── 会话行：按 id 增量复用 ───────────── */
@@ -793,7 +1032,7 @@
 
   /** 这些区域有自己的点击语义，按下不应启动拖窗。 */
   function isClickControl(target) {
-    return !!(target && target.closest && target.closest('[data-act], .row, #detail, #stats'));
+    return !!(target && target.closest && target.closest('[data-act], .row, #detail, #stats, .nudge'));
   }
 
   function onDragDown(ev) {
@@ -840,11 +1079,12 @@
     // 双击 = 把 DSH 叫到前面（省得去托盘里找）
     $('compact').addEventListener('dblclick', (ev) => { ev.preventDefault(); openDsh(); });
 
-    // 展开态：按区域分派。可点区（详情/统计/行/设置）自己处理，
+    // 展开态：按区域分派。可点区（详情/统计/行/提醒/设置）自己处理，
     // 其余空白 = 钉住/取消 —— 与 Swift 版的「点非对话区 = 钉住」同一分工。
     $('hud').addEventListener('click', (ev) => {
       const target = ev.target;
       if (target.closest('#list .row')) return;            // 行自己处理
+      if (target.closest('#nudges .nudge')) return;        // 提醒行自己处理
       if (target.closest('#detail')) { jumpPrimary(); return; }
       if (target.closest('#stats')) { jumpPrimary(); return; }
       if (target.closest('[data-act="settings"]')) { openDsh(); return; }
@@ -858,6 +1098,15 @@
       const id = row.getAttribute('data-id');
       const entry = state.entries.find((x) => x.id === id);
       if (entry) jumpTo(entry);
+    });
+
+    // 提醒行点击（同样走事件委托：行按 id 复用，不重复绑定）
+    $('nudges').addEventListener('click', (ev) => {
+      const row = ev.target.closest('.nudge');
+      if (!row) return;
+      const id = row.getAttribute('data-id');
+      const item = state.nudges.find((x) => x.id === id);
+      if (item) handleNudgeClick(item);
     });
 
     // 右键：原生菜单（钉住/隐藏/设置/配置目录/退出）

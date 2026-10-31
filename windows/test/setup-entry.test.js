@@ -90,9 +90,12 @@ const sentChannels = channelsBy(code.main, /sendToRenderer\(\s*'([^']+)'/g);
 
 const eqSet = (a, b) => a.size === b.size && [...a].every((x) => b.has(x));
 
-console.log('=== S1: 通道名必须两边一致（10 invoke + 4 send）===');
+console.log('=== S1: 通道名必须两边一致（14 invoke + 4 send）===');
 {
-  check('preload 用 invoke 的通道数是 13（含自定义拖窗三通道）', invokeChannels.size === 13, [...invokeChannels].join(','));
+  // 计数必须与 preload/main 实况一致：新增一个通道而不改这里，等价于
+  // 没有测试覆盖它 —— 这条断言的作用就是逼着改动方把上面这个数字一起改。
+  check('preload 用 invoke 的通道数是 14（含自定义拖窗三通道 + 提醒确认）',
+    invokeChannels.size === 14, [...invokeChannels].join(','));
   check('preload 订阅的推送通道数是 4', subscribeChannels.size === 4, [...subscribeChannels].join(','));
   check('主进程 ipcMain.handle 的通道集合 == preload invoke 集合',
     eqSet(handledChannels, invokeChannels),
@@ -102,12 +105,13 @@ console.log('=== S1: 通道名必须两边一致（10 invoke + 4 send）===');
     eqSet(sentChannels, subscribeChannels),
     '多：' + [...sentChannels].filter((c) => !subscribeChannels.has(c)).join(',')
       + ' 少：' + [...subscribeChannels].filter((c) => !sentChannels.has(c)).join(','));
-  check('两组合计 17 个通道', invokeChannels.size + subscribeChannels.size === 17);
+  check('两组合计 18 个通道', invokeChannels.size + subscribeChannels.size === 18);
   check('invoke 与 send 两组不重叠',
     [...invokeChannels].every((c) => !sentChannels.has(c)));
   check('主进程注册了 island:open-dsh', handledChannels.has('island:open-dsh'));
   check('主进程注册了右键菜单 island:context-menu', handledChannels.has('island:context-menu'));
   check('主进程注册了 island:notify（renderer 暂未用，但通道先就绪）', handledChannels.has('island:notify'));
+  check('主进程注册了提醒确认 island:nudge-ack', handledChannels.has('island:nudge-ack'));
   check('主进程会推 island:snapshot', sentChannels.has('island:snapshot'));
   check('主进程看门狗会推 island:pointer-leave', sentChannels.has('island:pointer-leave'));
   check('右键菜单的钉住走 island:pin-toggle 回渲染层', sentChannels.has('island:pin-toggle'));
@@ -131,12 +135,12 @@ console.log('\n=== S2: 渲染层引用的方法必须真的暴露了 ===');
   const re2 = /window\.island\.([a-zA-Z][a-zA-Z0-9]*)/g;
   while ((m = re2.exec(code.renderer))) called.add(m[1]);
 
-  check('preload 暴露了 17 个方法', exposed.size === 17, [...exposed].join(','));
+  check('preload 暴露了 18 个方法', exposed.size === 18, [...exposed].join(','));
   check('渲染层确实调了桥外的方法', called.size > 0, [...called].join(','));
   const missing = [...called].filter((n) => !exposed.has(n));
   check('每个调用都在 preload 里暴露过', missing.length === 0, '缺：' + missing.join(','));
-  check('渲染层调用的方法集合与预期一致（11 个）',
-    eqSet(called, new Set(['onSnapshot', 'onPointerLeave', 'onCursor', 'onPinToggle', 'jump',
+  check('渲染层调用的方法集合与预期一致（12 个，含提醒确认 nudgeAck）',
+    eqSet(called, new Set(['onSnapshot', 'onPointerLeave', 'onCursor', 'onPinToggle', 'jump', 'nudgeAck',
       'setInteractive', 'openDsh', 'contextMenu', 'dragStart', 'dragMove', 'dragEnd'])), [...called].join(','));
   check('渲染层用上了 openDsh（设置入口真的接上了）', called.has('openDsh'));
   check('渲染层订阅了快照推送 onSnapshot', called.has('onSnapshot'));
@@ -151,6 +155,7 @@ console.log('\n=== S2: 渲染层引用的方法必须真的暴露了 ===');
     ['onPointerLeave', 'island:pointer-leave'],
     ['onPinToggle', 'island:pin-toggle'],
     ['jump', 'island:jump'],
+    ['nudgeAck', 'island:nudge-ack'],
     ['setInteractive', 'island:set-interactive'],
     ['openDsh', 'island:open-dsh'],
     ['contextMenu', 'island:context-menu'],
@@ -332,8 +337,12 @@ console.log('\n=== S10: 交互与动效契约（Mac 对齐口径 + v2 三道防�
     /HOVER_OPEN_MS = 200/.test(code.renderer) && /HOVER_CLOSE_MS = 350/.test(code.renderer));
   check('「等待确认」自动展开（与 macOS 版同一条纪律）',
     /state\.primary && state\.primary\.status === 'waiting'/.test(code.renderer));
-  check('没会话时不展开（避免一块空板）',
-    /if \(!state\.entries\.length\) return false;/.test(code.renderer));
+  // 「空板」的判据在提醒融合后扩大了一格：没有会话**且**没有提醒才是空板。
+  // 只有提醒、没有会话时必须能悬停展开 —— 否则折叠条上那个 `?1` 徽标点开
+  // 什么都没有，信息断层。这改的是判据的定义，不是为了让断言变绿而放宽：
+  // 反面（`entries.length || nudges.length` 漏写一半）会在下面那条独立断言里红。
+  check('没有会话也没有提醒时不展开（避免一块空板）',
+    /if \(!state\.entries\.length && !state\.nudges\.length\) return false;/.test(code.renderer));
 
   check('命中按岛的当前矩形算（islandRect 缓存，不是窗口热区）',
     /function hitIsland/.test(code.renderer) && /const r = islandRect\(\);/.test(code.renderer));
@@ -504,7 +513,7 @@ console.log('\n=== S11: 性能不变量（契约 §7）===');
   check('rendererLoaded 之前不推进 lastRev（避免首帧永久丢失）',
     /if \(rendererLoaded && payload\.rev !== lastRev\)/.test(code.main));
   check('takeSnapshot 的 DTO 由 buildSnapshot 统一产出',
-    /function takeSnapshot[\s\S]{0,700}buildSnapshot\(\{ entries, config: cfg, bridge: bridgeState, jump: lastJump, now \}\)/.test(code.main));
+    /function takeSnapshot[\s\S]{0,900}buildSnapshot\(\{ entries, nudges: nudgeItems, config: cfg, bridge: bridgeState, jump: lastJump, now \}\)/.test(code.main));
 }
 
 console.log('\n=== S12: 动效与视觉口径（契约 §3/§6）===');
