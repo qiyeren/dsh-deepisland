@@ -7,7 +7,11 @@ import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { createIsolatedModule } from './isolated-module.mjs';
+import { isolateBridgeEnvironment } from './bridge-sandbox.mjs';
+
+const sandbox = isolateBridgeEnvironment();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -24,9 +28,11 @@ const ROOT = path.resolve(__dirname, '..');
 const REAL_HOME = process.env.HOME;
 const REAL_USERPROFILE = process.env.USERPROFILE;
 const REAL_APPDATA = process.env.APPDATA;
+const REAL_XDG_CONFIG_HOME = process.env.XDG_CONFIG_HOME;
 const TEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'vibe-island-test-home-'));
 process.env.HOME = TEST_HOME;
 process.env.USERPROFILE = TEST_HOME;
+process.env.XDG_CONFIG_HOME = path.join(TEST_HOME, '.config');
 // Windows 上 appDataDir() 先读 %APPDATA% —— 不一起改掉的话，测试会写进
 // **用户真实的** %APPDATA%\DSHNotch\client-config.json（本轮在 Windows 上实测
 // 踩到：断言「配置路径在临时 HOME 内」直接红了，说明它正往真环境写）。
@@ -38,39 +44,19 @@ const restoreHome = () => {
   if (REAL_USERPROFILE === undefined) delete process.env.USERPROFILE;
   else process.env.USERPROFILE = REAL_USERPROFILE;
   if (REAL_APPDATA === undefined) delete process.env.APPDATA; else process.env.APPDATA = REAL_APPDATA;
+  if (REAL_XDG_CONFIG_HOME === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = REAL_XDG_CONFIG_HOME;
   try { fs.rmSync(TEST_HOME, { recursive: true, force: true }); } catch { /* ignore */ }
 };
 // 用 exit 钩子而不是只在末尾调用：中途断言抛异常也要把 HOME 还回去。
 process.on('exit', restoreHome);
 
-// 复用服务端半边。它静态 import 了宿主提供的 @deepseek-ai/schemastery，
-// 仓库里没装；造一个只够构造 Config 的最小替身，跑完立刻删 ——
-// 绝不能长期留在仓库里遮蔽真依赖。
-const shimDir = path.join(ROOT, 'node_modules', '@deepseek-ai', 'schemastery');
-let madeShim = false;
-if (!fs.existsSync(shimDir)) {
-  const chain = "const node = () => { const s = {}; for (const m of ['default','description','step','min','max','readonly']) s[m] = () => s; return s; };\n"
-    + "export default { object: node, union: node, boolean: node, number: node, natural: node, string: node, const: node };\n";
-  fs.mkdirSync(shimDir, { recursive: true });
-  fs.writeFileSync(path.join(shimDir, 'package.json'),
-    JSON.stringify({ name: '@deepseek-ai/schemastery', version: '0.0.0-test-shim', type: 'module', main: 'index.js' }));
-  fs.writeFileSync(path.join(shimDir, 'index.js'), chain);
-  madeShim = true;
-}
-const dropShim = () => {
-  if (!madeShim) return;
-  try { fs.rmSync(path.join(ROOT, 'node_modules'), { recursive: true, force: true }); } catch { /* ignore */ }
-};
-
-let server, mod;
-try {
-  server = await import(pathToFileURL(path.join(ROOT, 'lib', 'index.js')).href);
-  // harness.mjs 是副作用导入：它执行 client.js、把 factory 产物挂到 __mod
-  await import('./harness.mjs');
-  mod = globalThis.__mod;
-} finally {
-  dropShim();
-}
+const fixture = createIsolatedModule();
+const server = await fixture.importModule();
+if (!path.resolve(server.appDataDir()).startsWith(path.resolve(TEST_HOME) + path.sep)) throw new Error('app data escaped test home');
+// harness.mjs 是副作用导入：它执行 client.js、把 factory 产物挂到 __mod
+await import('./harness.mjs');
+const mod = globalThis.__mod;
 if (!mod) { console.error('❌ 未能取到 client.js 的 factory 产物'); process.exit(1); }
 
 let pass = 0, fail = 0;
@@ -87,7 +73,7 @@ function freePort() {
     s.once('error', reject);
     s.listen(0, '127.0.0.1', () => {
       const p = s.address().port;
-      s.close(() => resolve(p));
+      s.close(() => resolve(p <= 65524 && (p < 47300 || p > 47322) ? p : freePort()));
     });
   });
 }
@@ -180,7 +166,7 @@ console.log('\n=== T2: 端到端 —— POST /jump → 客户端 openSession ===
 
   const bridge = port > 0 ? await server.startBridge({ port, log: () => {} }) : null;
   check('服务端桥已起', !!bridge);
-  if (!bridge) { console.log('  ⚠️  无可用端口，后续用例跳过'); }
+  if (!bridge || bridge.reused) throw new Error('test bridge not owned');
 
   const opened = [];
   const fakeCtx = { get: (n) => (n === 'uiWorkspace' ? { openSession: (t) => opened.push(t) } : undefined) };
@@ -260,13 +246,13 @@ console.log('\n=== T3b: probeBridge 语义 ===');
   const none = await mod.probeBridge(47900);
   check('空端口段返回 null', none === null, JSON.stringify(none));
   // 真 DSH 的桥若在running，这里应探到它 —— 两种结果都对，不作强断言
-  const maybe = await mod.probeBridge();
-  if (maybe) {
-    check('探到的桥带端口与版本', !!maybe.port && !!maybe.base, JSON.stringify(maybe));
-  } else {
-    console.log('     ℹ️  当前没有桥在运行（真 DSH 未开），跳过「探到」分支');
-    check('probeBridge 从不抛错', true);
-  }
+  // Never scan the default range: only probe a bridge owned by this test.
+  const port = await freePort();
+  const owned = await server.startBridge({ port, log: () => {} });
+  if (!owned || owned.reused) throw new Error('test bridge not owned');
+  const found = await mod.probeBridge(owned.port, 1);
+  check('探到自有桥并返回端口', found?.port === owned.port, JSON.stringify(found));
+  await owned.close();
 }
 
 // ===========================================================================
@@ -274,8 +260,10 @@ console.log('\n=== T4: openSession 抛错不能带崩轮询 ===');
 // ===========================================================================
 {
   // 同样用动态端口：真 DSH 的桥在 47311 时，固定端口会让本测试连到真桥上去
-  const bridge = await server.startBridge({ port: 47950, log: () => {} });
-  check('T4 的桥起在独立端口', !!bridge && bridge.port === 47950, bridge && String(bridge.port));
+  const port = await freePort();
+  const bridge = await server.startBridge({ port, log: () => {} });
+  if (!bridge || bridge.reused) throw new Error('test bridge not owned');
+  check('T4 的桥起在独立端口', bridge.port === port, String(bridge.port));
   const opened = [];
   const flaky = {
     get: (n) => (n === 'uiWorkspace' ? {
@@ -286,7 +274,7 @@ console.log('\n=== T4: openSession 抛错不能带崩轮询 ===');
     } : undefined),
   };
   // basePort 直接指到本测试的桥，跳过顺延探测的歧义
-  const client = mod.startJumpBridge(flaky, { pollMs: 100, basePort: 47950 });
+  const client = mod.startJumpBridge(flaky, { pollMs: 100, basePort: bridge.port });
   await waitFor(() => client.state().base !== null, { what: '客户端探到桥' });
   await req(bridge.port, '/jump', { method: 'POST', body: { sessionId: 'session-boom' } });
   const gotBoom = await waitFor(() => opened.includes('session-boom'), { what: '第一条' });
@@ -309,11 +297,7 @@ console.log('\n=== T5: exports.inject 里不能有 uiWorkspace ===');
   check('桥相关件已导出供自检', typeof mod.startJumpBridge === 'function' && typeof mod.probeBridge === 'function');
 }
 
-console.log('\n' + '='.repeat(44));
-console.log('通过 ' + pass + ' / 失败 ' + fail);
-console.log('='.repeat(44));
 globalThis.__results = globalThis.__results || {};
-globalThis.__results.bridgeclient = { pass, fail };
 
 // ===========================================================================
 console.log('\n=== T6: 设置持久化 —— 复现并锁死「开关点不动」 ===');
@@ -366,8 +350,11 @@ console.log('\n=== T6: 设置持久化 —— 复现并锁死「开关点不动�
   check('宿主没提供的键取本地值（不丢用户设置）',
     withHost.placement === 'menu', JSON.stringify(withHost));
 
+  // Fail before any write, not merely with a later non-fatal check.
+  if (!path.resolve(server.configFilePath()).startsWith(path.resolve(TEST_HOME) + path.sep)) throw new Error('config path escaped test home');
   // ---- 桥在时能落盘 ----
-  const bridge = await server.startBridge({ port: 47960, log: () => {} });
+  const bridge = await server.startBridge({ port: await freePort(), log: () => {} });
+  if (!bridge || bridge.reused) throw new Error('test bridge not owned');
   const put = await req(bridge.port, '/config', {
     method: 'POST', body: { enabled: false, glowEffect: false },
   });
@@ -539,3 +526,12 @@ console.log('\n=== T7: 源码层面锁死「不要退回单通道」 ===');
   check('无 scope 时不再谎称「使用默认配置」',
     !/未取得配置服务，使用默认配置（设置项不持久化）/.test(src), '那句误导性的告警还在');
 }
+console.log('\n' + '='.repeat(44));
+console.log('通过 ' + pass + ' / 失败 ' + fail);
+console.log('='.repeat(44));
+globalThis.__results.bridgeclient = { pass, fail };
+fixture.cleanup();
+process.removeListener('exit', restoreHome);
+restoreHome();
+sandbox.cleanup();
+if (fail) process.exitCode = 1;

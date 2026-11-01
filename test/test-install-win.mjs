@@ -7,30 +7,13 @@
 // 用法: node test/run.mjs installwin   （或直接 node test/test-install-win.mjs）
 import path from 'node:path';
 import fs from 'node:fs';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { createIsolatedModule } from './isolated-module.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-// ---- 依赖 shim：lib/index.js 只 import schemastery，本机没装依赖也能加载 ----
-const shim = path.join(ROOT, 'node_modules', '@deepseek-ai', 'schemastery');
-let madeShim = false;
-if (!fs.existsSync(shim)) {
-  const chain = "const node=()=>{const s={};for(const m of ['default','description','step','min','max','readonly'])s[m]=()=>s;return s;};\n"
-    + "export default {object:node,union:node,boolean:node,number:node,natural:node,string:node,const:node};\n";
-  fs.mkdirSync(shim, { recursive: true });
-  fs.writeFileSync(path.join(shim, 'package.json'),
-    JSON.stringify({ name: '@deepseek-ai/schemastery', version: '0.0.0-test-shim', type: 'module', main: 'index.js' }));
-  fs.writeFileSync(path.join(shim, 'index.js'), chain);
-  madeShim = true;
-}
-let mod;
-try {
-  // Windows 上绝对路径是 `D:\...`，直接喂 import() 会被当成 URL 协议（d:）而报
-  // ERR_UNSUPPORTED_ESM_URL_SCHEME —— 必须转成 file:// URL。
-  mod = await import(pathToFileURL(path.join(ROOT, 'lib', 'index.js')).href);
-} finally {
-  if (madeShim) { try { fs.rmSync(path.join(ROOT, 'node_modules'), { recursive: true, force: true }); } catch { /* ignore */ } }
-}
+const fixture = createIsolatedModule();
+const mod = await fixture.importModule();
 
 let pass = 0, fail = 0;
 const check = (name, cond, extra = '') => {
@@ -38,8 +21,7 @@ const check = (name, cond, extra = '') => {
   else { fail++; console.log('  ❌ ' + name + '  → ' + extra); }
 };
 
-const BASE = path.join(ROOT, 'test', '.tmp', 'win-install');
-fs.rmSync(BASE, { recursive: true, force: true });
+const BASE = path.join(fixture.dir, 'win-install');
 fs.mkdirSync(BASE, { recursive: true });
 
 const stub = () => ({ on() {}, unref() {} });
@@ -303,13 +285,9 @@ console.log('\n=== W7: autoInstallApp=false 时仍要启动「已装」的那份
 // ===========================================================================
 {
   const src = fs.readFileSync(path.join(ROOT, 'lib', 'index.js'), 'utf8');
-  check('autoInstallApp=false 分支会调用 ensureAppInstalled（否则不会启动已装的 app）',
-    /else \{[\s\S]{0,500}ensureAppInstalled\(\{ installDir, log, dryRun: true, launch: true \}\)/.test(src),
+  check('autoInstallApp=false 分支使用 existingOnly 启动已装 app',
+    /ensureAppInstalled\(\{ installDir, log, existingOnly: true, launch: true \}\)/.test(src),
     '没找到「只启动不安装」的调用');
-  check('该分支传了 dryRun: true（保证不写文件、不下载）',
-    /dryRun: true, launch: true/.test(src));
-  check('该分支传了 launch: true（这才是启动意图）',
-    /ensureAppInstalled\(\{ installDir, log, dryRun: true, launch: true \}\)/.test(src));
   check('日志会说明「自动安装已关闭，仅在已装时启动」',
     /自动安装已关闭，仅在已装时启动/.test(src));
   check('不再出现「配置关闭，未检查 app」那种什么都没做的写法',

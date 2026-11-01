@@ -265,16 +265,49 @@ function ack(ids, opts = {}) {
     }
     if (!pluginMatches(r.obj)) return { ok: false, removed: 0, remaining: 0, reason: 'plugin' };
     if (!r.obj || r.obj.ok !== true) return { ok: false, removed: 0, remaining: 0, reason: 'not-ok' };
+    if (!Number.isSafeInteger(r.obj.removed) || r.obj.removed < 0) {
+      return { ok: false, removed: 0, remaining: 0, reason: 'invalid-removed' };
+    }
     return {
       ok: true,
-      removed: nonNegInt(r.obj.removed),
+      removed: r.obj.removed,
       remaining: nonNegInt(r.obj.remaining),
       reason: '',
     };
   }).catch(() => ({ ok: false, removed: 0, remaining: 0, reason: 'network' }));
 }
 
+/** A count alone cannot identify which ID was removed from a batch. Ack each
+ * generation separately and only remove the matching local ID on confirmation.
+ * Callbacks are injected so this policy can be tested without Electron or HTTP.
+ */
+async function acknowledgeItems(ids, effects) {
+  const list = [...new Set(Array.isArray(ids)
+    ? ids.filter((id) => typeof id === 'string' && id.trim()).map((id) => id.trim())
+    : [])];
+  if (!list.length) return { ok: false, remaining: effects.getItems().length };
+  effects.invalidate();
+  let ok = true;
+  for (const id of list) {
+    let result;
+    try { result = await effects.ack([id]); } catch { result = { ok: false, reason: 'network' }; }
+    if (result && result.ok === true && result.removed === 1) {
+      effects.confirmed(id);
+      effects.setItems(effects.getItems().filter((item) => item.id !== id));
+    } else {
+      ok = false;
+      effects.retain(id);
+      effects.warn((result && result.reason) || 'zero-or-invalid-removed');
+    }
+  }
+  effects.invalidate();
+  effects.notify();
+  effects.refresh();
+  return { ok, remaining: effects.getItems().length };
+}
+
 module.exports = {
+  acknowledgeItems,
   PLUGIN_NAME,
   DEFAULT_TIMEOUT_MS,
   KINDS,

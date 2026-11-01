@@ -34,7 +34,7 @@ console.log('\n=== W2: 首选路径 —— 桥通 ===');
   check('kind = bridged', r.kind === 'bridged', r.kind);
   check('usedBridge = true', r.usedBridge === true);
   check('isSuccess = true', r.isSuccess === true);
-  check('brief「已切到该对话」', r.brief === '已切到该对话', r.brief);
+  check('brief「跳转请求已入队」', r.brief === '跳转请求已入队', r.brief);
   check('顺序是 先置前 再投桥', calls.join('>') === 'activate>post', calls.join('>'));
   check('桥通时不写剪贴板（不污染用户的剪贴板）', !calls.includes('copy'), calls.join('>'));
 

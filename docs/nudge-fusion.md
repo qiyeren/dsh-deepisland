@@ -3,8 +3,7 @@
 上游 `HalfDone03/dsh-nudge` 的三种「该你处理了」时刻（**任务完成 / 需要你选择 / 执行失败**），
 改成由常驻的岛体承载，而不是每次都弹一张一次性 WPF 卡片。
 
-理由写在本文 §0；接口形状写死在这里，Host 侧与 Windows app 侧分别按 §1 / §2 实现，
-**两侧不得各自发明字段名**。
+本文描述当前工作区源码及其设计契约，不代表已经安装、运行或验证的版本。本次未为 fork 构建发行版；上游 Release 不包含本 fork 的保证。桥接安全与浏览器 API 改动仍在进行中，下文涉及这些内容时是设计意图，须以后续验证为准。融合呈现仅适配 Windows，macOS 尚未适配。
 
 ---
 
@@ -12,10 +11,10 @@
 
 | 维度 | nudge 现状 | 融合后 |
 | --- | --- | --- |
-| 载体 | `powershell.exe` + WPF 一次性 helper（每次约 100–200ms 启动、60–80MB） | 已经在跑的岛，零新增进程 |
-| 位置 | 桌面右下角，盖在任务栏上方 | 屏幕顶端常驻，不挡内容 |
-| 点击 | `SetForegroundWindow` 聚焦 DSH 主窗口（**没有会话级深链**，只能人工找） | `POST /jump` → 渲染进程 `uiWorkspace.openSession(id)`，**真的跳到那个会话** |
-| 多条提醒 | 1.2s 合并窗口内合成一张卡 | 同样合并，并且常驻可见，不会 15 秒后自己消失 |
+| 载体 | `powershell.exe` + WPF 一次性 helper | 复用 Windows 岛体；不对资源占用或启动时间作未经验证的量化 |
+| 位置 | 桌面右下角，盖在任务栏上方 | 屏幕顶端岛体，可能遮挡内容 |
+| 点击 | 聚焦 DSH 主窗口 | `POST /jump` 入队，客户端尝试 `uiWorkspace.openSession(id)`；入队不证明已打开 |
+| 多条提醒 | 合并窗口内合成一张卡 | 在合并窗口内合并，受配置、容量、TTL 和确认影响 |
 | 静音 | Host 侧判时段，不生成 | 相同 |
 | 全屏抑制 | helper 判前台全屏 | **未实现**（见 §4 已知边界） |
 
@@ -39,8 +38,7 @@ nudge 的真正价值是**事件语义**（三类、严重度、合并、静音�
 | 待选择 | 包装 `ctx.get('userQuestions').ask` | 原样转发，卸载时还原原函数并删掉幂等标记 |
 | 标题 | `session/title` 事件 → 本地缓存 | 另外**每次需要时**再试 `ctx.get('sessionTitle').get(session).title`；**不要读 `session.header.title`**（该字段不存在） |
 
-过滤：`session.header.parentSession != null` 或 `delegationDepth > 0` 的子代理会话**不提醒**
-（父会话会汇总，单独弹是噪音）。
+过滤：对 `session/event`，忽略 `session.header.parentSession != null` 或 `delegationDepth > 0` 的子代理会话。审批与提问路径不做该过滤，因此子代理的待选择请求仍可能产生提醒；不要假定父会话一定汇总所有子任务事件。
 
 生成条目时的字段归一：
 
@@ -51,7 +49,7 @@ nudge 的真正价值是**事件语义**（三类、严重度、合并、静音�
 
 ### 1.2 合并与去重
 
-- 合并窗口 `mergeWindowMs`（默认 1200）：窗口内同 `(kind, sessionId)` 的重复事件**累加 `count`**，不新建条目
+- 合并窗口 `mergeWindowMs`（默认 1200）：窗口内同 `(kind, sessionId)` 的重复事件累加 `count`，并将条目 ID 轮换为新 UUID；旧快照的确认不会删除合并后的新版本。
 - 队列上限 `maxItems` 之外的旧条目丢弃（按 `ts` 先进先出）
 - 同一条目 TTL 30 分钟；`ack` 立即移除
 
@@ -61,15 +59,15 @@ nudge 的真正价值是**事件语义**（三类、严重度、合并、静音�
 GET  /nudges
      -> { ok: true, plugin, version, rev, items: NudgeItem[] }
 POST /nudge/ack
-     body: { ids: string[] } | { all: true }
-     -> { ok: true, removed: number, remaining: number, rev }
+     body: { ids: string[] }  // 1–8 个已观察到的 ID；不支持 all
+     -> { ok: true, plugin, version, removed: number, remaining: number }
 ```
 
 `NudgeItem`：
 
 ```json
 {
-  "id": "needs_choice::session-abc::7",
+  "id": "0f3d5c70-7789-4c80-88c2-e14a42211111",
   "kind": "completed | needs_choice | failed",
   "severity": 0,
   "sessionId": "session-abc",
@@ -85,7 +83,9 @@ POST /nudge/ack
 
 - `severity`：`needs_choice = 0` < `failed = 1` < `completed = 2`（**数字越小越该处理**）
 - `rev`：内容指纹（`id`+`count`+`ts` 的稳定序列化哈希），app 侧靠它判「要不要重新渲染」
-- 响应带 `plugin` 名回显，与 `/health` 一致，让 app 侧能确认「这个端口的服务真是本插件」
+- 响应带 `plugin` 名回显，供 app 侧识别；名称可被伪造，并非服务身份认证。
+
+**桥接边界（工作区设计，尚需验证）**：浏览器通过受 DSH 宿主信任和会话认证保护的同源 `/api/dsh-vibe-island/config` 读写配置，通过同源 `POST /api/dsh-vibe-island/next` 取跳转队列；路由自身不认证。原生回环桥要求 `Host` 为实际 `127.0.0.1:端口`，拒绝带 `Origin` 或任意 `Sec-Fetch-*` 的请求；这是降低浏览器攻击面，不是认证，本地进程可自行构造请求。桥所有权或端口冲突时按严格失败关闭设计停止启动，不顺延或复用未知桥；旧版本可能不遵守所有权约束。跳转请求入队仅为尽力投递，客户端取走后仍可能失败或丢失，不证明会话实际打开。
 
 ### 1.4 配置（写 **`client-config.json`**，与其余配置同源，不改 `Config(z.object)`）
 
@@ -98,7 +98,7 @@ POST /nudge/ack
 | `nudgeOnFailed` | boolean | `true` | 失败类是否记录 |
 | `nudgeOnChoice` | boolean | `true` | 待选择类是否记录 |
 | `nudgeAlertOnToolError` | boolean | `true` | 单次工具失败是否也算失败 |
-| `nudgeMuteRanges` | string | `'22:00-08:00'` | `HH:MM-HH:MM,HH:MM-HH:MM`，支持跨零点、可空串关闭 |
+| `nudgeMuteRanges` | string | `''` | `HH:MM-HH:MM,HH:MM-HH:MM`，支持跨零点；空串表示不静音 |
 | `nudgeMergeWindowMs` | number | `1200` | 合并窗口，200..10000 |
 | `nudgeMaxItems` | number | `4` | 岛上一屏最多列几条，1..8 |
 | `nudgeTtlMinutes` | number | `30` | 条目 TTL，1..1440 |
@@ -124,7 +124,7 @@ nudges: [ { id, kind, severity, sessionId, label, detail, at, count } ]
 - 折叠态：`#c-nudge` 徽标（`is-off` 时隐藏），文本按最严重那类取符号 + 计数：`needs_choice` → `?N`、`failed` → `!N`、`completed` → `✔N`
 - 岛体根节点新增 `data-nudge="none|choice|failed|done"`
 - `--glow` **仍由 renderer 唯一写入**：`needs_choice` 覆盖为琥珀 `#F5A623`；`failed` 且当前 `status !== 'waiting'` 覆盖为红 `#E74C3C`；其余维持原状态色
-- 展开 HUD：`#nudges` 区块（空则 `is-off`），每行 = 类色条 + `label` + `detail` + `at`；点击行 = `window.island.jump({ id, label })` 然后 `window.island.nudgeAck({ ids: [id] })`
+- 展开 HUD：`#nudges` 区块（空则 `is-off`），每行 = 类色条 + `label` + `detail` + `at`；点击后通过 `window.island.jump({ id, label, nudgeId })` 让主进程先捕获当前快照项；只有捕获成功且跳转请求入队（`kind === 'bridged'`）后才逐条调用 `window.island.nudgeAck({ ids: [item.id] })`。确认失败或没有移除时尝试在本地保留并刷新；入队和确认均不证明会话已打开。本地保留仅在进程内有效，可能重复；实时提醒占满显示上限时，保留项可能持续不可见，应用重启后也不会恢复。保留副本至多 128 条，超出时淘汰最早条目；首次保留满 24 小时后，在下次成功拉取时移除副本。离线期间不按时间清除，移除副本不会确认或删除服务端提醒；系统时钟变化会影响保留时长。
 - 样式：三色常量只定义一次；循环动画受 `data-glow="0"` 与 `prefers-reduced-motion` 双门控（与既有纪律一致）
 
 ## §3 测试要求
@@ -137,5 +137,5 @@ nudges: [ { id, kind, severity, sessionId, label, detail, at, count } ]
 ## §4 已知边界（**不许装作能做到**）
 
 1. **macOS 端未适配**：本机无 macOS/Swift 工具链，改 Swift 无法编译验证，贸然改会让上游 `release.yml` 的 mac job 红掉。mac 侧需要 `SessionMonitor` 读 `/nudges` 并在 `NotchContentView` 加提醒条 —— 留作独立任务。
-2. **全屏抑制未实现**：Electron 侧要枚举前台全屏窗口，成本与回归面都大于收益；当前只在静音时段生效。
+2. **全屏抑制未实现**：不会因为前台全屏而自动抑制；可配置静音时段，默认空串表示不静音。
 3. **不抢焦点**：提醒**只在岛体内显示**，不弹系统通知、不自动展开 HUD（避免打断正在全屏操作的人）。用户悬停才看到明细。

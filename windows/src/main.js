@@ -142,6 +142,18 @@ let nudgeItems = [];
  * 一次的重建与重渲染。
  */
 let nudgeRev = '';
+// Invalidates old in-flight fetches when an ack starts or completes.
+let nudgeFetchEpoch = 0;
+// Failed confirmations remain visible even if the next fetch reaches another owner.
+const retainedNudges = new Map();
+// Local fallback only: a day to retry a failed confirmation, at most 128 IDs.
+// Retiring these copies never acknowledges or deletes anything on the bridge.
+function retainNudge(item) {
+  if (retainedNudges.has(item.id)) return; // Repeated failures cannot extend the lifetime.
+  while (retainedNudges.size >= 128) retainedNudges.delete(retainedNudges.keys().next().value);
+  retainedNudges.set(item.id, { ...item, _retainedAt: Date.now() });
+}
+let nudgeAckInFlight = 0;
 /**
  * 提醒拉取失败时的降噪键（`reason`）。
  *
@@ -663,7 +675,10 @@ function stopCursorWatch() {
  * @param {object} cfg 本拍 config.load() 的结果（nudgeMaxItems 取在这里）
  */
 function probeNudges(cfg) {
+  if (nudgeAckInFlight) return;
+  const epoch = ++nudgeFetchEpoch;
   nudges.fetchNudges().then((r) => {
+    if (epoch !== nudgeFetchEpoch) return;
     if (!r.ok) {
       const key = r.reason || 'unknown';
       if (nudgeWarnKey !== key) {
@@ -674,8 +689,17 @@ function probeNudges(cfg) {
       return;
     }
     nudgeWarnKey = '';
-    // 服务端 rev 没变：什么都不做（见函数头第 1 条）。
-    if (r.rev === nudgeRev) return;
+    // Only a successful fetch can retire local fallbacks: offline is not proof
+    // that an alert disappeared. Recompute even when the server rev is stable.
+    let retired = false;
+    const now = Date.now();
+    for (const [id, item] of retainedNudges) {
+      if (now - item._retainedAt >= 24 * 60 * 60 * 1000) {
+        retainedNudges.delete(id);
+        retired = true;
+      }
+    }
+    if (!retired && nudgeRev && r.rev === nudgeRev) return;
 
     // 条数上限来自配置（插件设置面板的「一屏几条」）。config.load() 已经把
     // 它收进顶层字段并做了 1..8 的取值校验，这里不再 clamp 第二遍 ——
@@ -684,10 +708,16 @@ function probeNudges(cfg) {
     // 按严重度升序（越小越该先处理），同档按时间倒序（新的在前）。
     // 服务端已排过序，这里再排一次是因为**截断发生在 app 侧**：maxItems 只
     // 留前 N 条，拿错顺序留下的就是最不重要的那几条。
-    const items = r.items
-      .slice()
-      .sort((a, b) => (a.severity - b.severity) || (b.ts - a.ts))
-      .slice(0, max);
+    const order = (a, b) => (a.severity - b.severity) || (b.ts - a.ts);
+    const fetched = r.items.slice().sort(order);
+    // Live bridge items always take priority. Local fallbacks can be hidden by
+    // the display cap and retire after 24h or when the 128-ID cache fills.
+    const fallback = [];
+    for (const [id, retained] of retainedNudges) {
+      // Session/kind alone cannot identify a successor across bridge owners.
+      if (!fetched.some((item) => item.id === id)) fallback.push(retained);
+    }
+    const items = fetched.concat(fallback.sort(order)).slice(0, max);
 
     const nextRev = r.rev;
     const same = (items.length === nudgeItems.length)
@@ -948,6 +978,17 @@ function applyVisibility(cfg) {
 
 ipcMain.handle('island:jump', async (_e, payload) => {
   const entry = payload || {};
+  // Only preserve an item that main both supplied in its latest snapshot and
+  // still has locally. Never trust reminder content supplied by the renderer.
+  // Capture before performJump can yield to an ordinary fetch from another owner.
+  const displayed = lastPayload && Array.isArray(lastPayload.nudges)
+    && lastPayload.nudges.some((item) => item.id === entry.nudgeId && item.sessionId === entry.id);
+  const captured = displayed && nudgeItems.find((item) => item.id === entry.nudgeId && item.sessionId === entry.id);
+  if (captured) {
+    retainNudge(captured);
+    nudgeRev = '';
+    nudgeFetchEpoch++;
+  }
   const cfg = config.load();
   const outcome = await performJump(entry, {
     // `dsh://open` 是 DSH 唯一对外注册的深链。Windows 上是否注册过未实测 ——
@@ -971,48 +1012,37 @@ ipcMain.handle('island:jump', async (_e, payload) => {
   // 旧实现靠「清空上一次快照字符串」强制下一拍必推；rev 去重这套里不再需要
   // 那种「清空去重状态」的技巧 —— 回执内容本身就变了。
   poke();
-  return { ok: outcome.isSuccess, brief: outcome.brief, kind: outcome.kind };
+  return { ok: outcome.isSuccess, brief: outcome.brief, kind: outcome.kind, nudgeCaptured: !!captured };
 });
 
-/**
- * 用户点了（处理过）一条提醒 → 通知服务端移除。
- *
- * ## 为什么本地也要立刻删
- *
- * 服务端是真相源，但它的下一次拉取最多要等 2 秒。用户的动作是「我点过了」，
- * 那条提醒必须当场消失 —— 否则会出现「点了，它还挂在原地」这种最伤信任的
- * 反馈。所以：**先本地移除 + poke（立刻重渲染），再让服务端慢慢同步**。
- *
- * 万一服务端 ack 失败（桥刚好重启），下一拍拉取还会把它拉回来 —— 界面上
- * 表现为「它又出现了」。这比「假装删掉、服务端其实还在」好：后者用户永远
- * 点不掉，而且没有任何线索。
- *
- * `nudgeRev` 在列表清空时置空：清空意味着「本地与服务端暂时不一致」，
- * 置空强制下一拍把服务端那份重新拉一遍（而不是靠 rev 相等跳过）。
- */
+/** Acknowledge each generation only after the bridge confirms its removal. */
 ipcMain.handle('island:nudge-ack', async (_e, payload) => {
   const p = (payload && typeof payload === 'object') ? payload : {};
-  const ids = Array.isArray(p.ids)
-    ? p.ids.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim())
-    : [];
-  if (!ids.length) return { ok: false, remaining: nudgeItems.length };
-
-  // 先在本地移除（含 count 累加型重复：同 id 只算一条）
-  nudgeItems = nudgeItems.filter((it) => !ids.includes(it.id));
-
-  const r = await nudges.ack(ids);
-  if (r.ok) {
-    nudgeWarnKey = '';
-  } else if (nudgeWarnKey !== 'ack') {
-    nudgeWarnKey = 'ack';
-    console.warn('[dsh-notch] 提醒确认失败（' + (r.reason || 'unknown') + '）：本地已移除，下次拉取会同步');
+  nudgeAckInFlight++;
+  try {
+    return await nudges.acknowledgeItems(p.ids, {
+      getItems: () => nudgeItems,
+      setItems: (items) => { nudgeItems = items; },
+      ack: (ids) => nudges.ack(ids),
+      confirmed: (id) => retainedNudges.delete(id),
+      retain: (id) => {
+        const item = nudgeItems.find((entry) => entry.id === id);
+        if (item) retainNudge(item);
+      },
+      invalidate: () => { nudgeRev = ''; nudgeFetchEpoch++; },
+      notify: () => poke(),
+      refresh: () => {}, // Refresh after all simultaneous acknowledgements settle.
+      warn: (reason) => {
+        if (nudgeWarnKey !== 'ack') {
+          nudgeWarnKey = 'ack';
+          console.warn('[dsh-notch] 提醒确认失败（' + reason + '）：保留本地提醒并刷新');
+        }
+      },
+    });
+  } finally {
+    nudgeAckInFlight--;
+    if (!nudgeAckInFlight) probeNudges(config.load());
   }
-
-  // 列表空了就把 rev 清掉：下一拍重新拉一遍服务端，把「不是本地删的」
-  // （比如服务端又新增了别的）拿回来，而不是因为 rev 相同整段跳过。
-  if (!nudgeItems.length) nudgeRev = '';
-  poke();
-  return { ok: r.ok, remaining: nudgeItems.length };
 });
 
 /**

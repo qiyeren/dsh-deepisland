@@ -89,6 +89,7 @@
     jumpAt: 0,
     jumpTimer: 0,
     dshHint: null,
+    dshHintFailed: false,
     dshTimer: 0,
     focusIndex: -1,
     clockTimer: 0,
@@ -106,6 +107,8 @@
     nudges: [],
     /** 提醒行的节点缓存（与 rows 同一套增量复用纪律，按 id 复用）。 */
     nudgeRows: new Map(),
+    /** One jump/ack sequence at a time per reminder id. */
+    nudgeInFlight: new Set(),
   };
 
   /* ───────────────────────────── 差异写 DOM 的小工具 ─────────────────────────────
@@ -622,35 +625,39 @@
     });
   }
 
-  /**
-   * 点一条提醒：**先跳会话，再确认**（契约 §2.2 的顺序）。
-   *
-   * 顺序不能反：ack 会把它从快照里移除，行随即消失 —— 若此时 jump 还没
-   * 发出去，用户看到的是「行没了，但 DSH 没切过去」，而他会以为点错了。
-   * 先跳，用户看到 DSH 真的切过去，行再消失，因果链是清楚的。
-   *
-   * 失败也照样 ack：跳不进去（桥没起 / 会话已关）不该让提醒永远挂在岛上
-   * —— 那样用户只能反复点同一行。跳转的失败回执已经由 jump 自己的路径
-   * 显示（页脚 + 头部提示），提醒该退出舞台。
-   */
-  function handleNudgeClick(item) {
-    if (!item) return;
+  /** `bridged` means enqueued, not that the client actually navigated. */
+  async function handleNudgeClick(item) {
+    if (!item || !item.id || !item.sessionId || state.nudgeInFlight.has(item.id)) return;
     const id = item.sessionId || '';
-    if (id) {
-      window.island.jump({ id, label: item.label || '' }).catch(() => { /* 主进程已记日志 */ });
-    }
-    window.island.nudgeAck({ ids: [item.id] }).then((r) => {
-      // 主进程已经做了本地移除 + poke，这里只在本拍拿不到快照时兜一层：
-      // 直接按 id 从本地列表移除并重渲染，界面立刻反映（不依赖下一拍）。
-      state.nudges = state.nudges.filter((n) => n.id !== item.id);
-      render();
-      if (r && r.ok === false) {
-        state.dshHint = '提醒已在本地移除，桥恢复后会同步';
+    state.nudgeInFlight.add(item.id);
+    try {
+      const result = await window.island.jump({ id, label: item.label || '', nudgeId: item.id });
+      if (!result || result.kind !== 'bridged') return;
+      // Fail closed if main could not capture a trusted displayed generation.
+      if (result.nudgeCaptured !== true) {
+        state.dshHint = '提醒已变化，请刷新后重试';
+        state.dshHintFailed = true;
+        clearTimeout(state.dshTimer);
+        state.dshTimer = setTimeout(() => { state.dshHint = null; render(); }, RESULT_HOLD_MS);
+        updateHint();
+        return;
+      }
+      let ack;
+      let ackRejected = false;
+      try { ack = await window.island.nudgeAck({ ids: [item.id] }); }
+      catch { ackRejected = true; }
+      if (ack && ack.ok === true) {
+        state.nudges = state.nudges.filter((n) => n !== item);
+        render();
+      } else {
+        state.dshHint = ackRejected ? '提醒确认失败，请刷新后重试' : '提醒确认失败，已保留并刷新';
+        state.dshHintFailed = true;
         clearTimeout(state.dshTimer);
         state.dshTimer = setTimeout(() => { state.dshHint = null; render(); }, RESULT_HOLD_MS);
         updateHint();
       }
-    }).catch(() => { /* 同上 */ });
+    } catch { /* No confirmation: retain the reminder. */ }
+    finally { state.nudgeInFlight.delete(item.id); }
   }
 
   /* ───────────── 会话行：按 id 增量复用 ───────────── */
@@ -793,7 +800,10 @@
     const hint = $('h-hint');
     let text = '点对话跳转 · 点状态行钉住';
     let kind = '';
-    if (state.jump && state.jump.brief) {
+    if (state.dshHint && state.dshHintFailed) {
+      text = state.dshHint;
+      kind = 'failed';
+    } else if (state.jump && state.jump.brief) {
       text = state.jump.brief;
       kind = state.jump.kind === 'failed' ? 'failed' : 'ok';
     } else if (state.dshHint) {
@@ -988,6 +998,7 @@
     window.island.openDsh().then((r) => {
       // 做不到就说做不到：能不能把 DSH 带起来取决于它自己有没有单实例锁
       state.dshHint = (r && r.ok) ? '已切到 DSH' : 'DSH 设置 → 🏝️ 灵动岛';
+      state.dshHintFailed = false;
       render();
       clearTimeout(state.dshTimer);
       state.dshTimer = setTimeout(() => { state.dshHint = null; render(); }, RESULT_HOLD_MS);

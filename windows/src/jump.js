@@ -42,7 +42,7 @@ function clipboardText(entry) {
  *
  * 顺序讲究：**先置前，再投桥**。
  * 置前放在前面，是因为插件的 `openSession` 只换视图、不管窗口焦点；
- * 窗口先到前台，用户看到的才是「已经切好的那个会话」。
+ * 但桥只确认请求入队，不能保证客户端已经执行或完成切换。
  *
  * @param {object} entry 会话条目（至少要有 id / label）
  * @param {{
@@ -82,7 +82,7 @@ async function performJump(entry, deps = {}) {
   }
   if (bridged) {
     return {
-      kind: 'bridged', sessionId: id, text: title, brief: '已切到该对话',
+      kind: 'bridged', sessionId: id, text: title, brief: '跳转请求已入队',
       usedBridge: true, isSuccess: true, activated,
     };
   }

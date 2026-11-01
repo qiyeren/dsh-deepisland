@@ -10,28 +10,12 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { createIsolatedModule } from './isolated-module.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const shim = path.join(ROOT, 'node_modules', '@deepseek-ai', 'schemastery');
-let madeShim = false;
-if (!fs.existsSync(shim)) {
-  const chain = "const node=()=>{const s={};for(const m of ['default','description','step','min','max','readonly'])s[m]=()=>s;return s;};\n"
-    + "export default {object:node,union:node,boolean:node,number:node,natural:node,string:node,const:node};\n";
-  fs.mkdirSync(shim, { recursive: true });
-  fs.writeFileSync(path.join(shim, 'package.json'),
-    JSON.stringify({ name: '@deepseek-ai/schemastery', version: '0.0.0-test-shim', type: 'module', main: 'index.js' }));
-  fs.writeFileSync(path.join(shim, 'index.js'), chain);
-  madeShim = true;
-}
-let mod;
-try {
-  // Windows 上绝对路径形如 `D:\...`，直接喂 import() 会被当成 URL 协议（d:），
-  // 报 ERR_UNSUPPORTED_ESM_URL_SCHEME —— 必须转成 file:// URL。
-  mod = await import(pathToFileURL(path.join(ROOT, 'lib', 'index.js')).href);
-} finally {
-  if (madeShim) { try { fs.rmSync(path.join(ROOT, 'node_modules'), { recursive: true, force: true }); } catch { /* ignore */ } }
-}
+const fixture = createIsolatedModule();
+const mod = await fixture.importModule();
 
 let pass = 0, fail = 0;
 const check = (name, cond, extra = '') => {
@@ -39,7 +23,7 @@ const check = (name, cond, extra = '') => {
   else { fail++; console.log('  ❌ ' + name + '  → ' + extra); }
 };
 
-const FAKE_DIR = path.join(ROOT, 'test', '.tmp', 'fake-install');
+const FAKE_DIR = path.join(fixture.dir, 'fake-install');
 fs.rmSync(FAKE_DIR, { recursive: true, force: true });
 
 // ---- 跨平台命令行工具 -------------------------------------------------
@@ -161,7 +145,7 @@ console.log('\n=== T1b: 已装也要「请求启动」（否则重启 DSH 后永
 console.log('\n=== T2: 残缺的包不覆盖 ===');
 {
   // 模拟真实事故：.app 在，但 zstdlite 缺失（早期路径错位）
-  const dir = path.join(ROOT, 'test', '.tmp', 'broken-install');
+  const dir = path.join(fixture.dir, 'broken-install');
   fs.rmSync(dir, { recursive: true, force: true });
   const app = path.join(dir, 'DSHNotch.app', 'Contents', 'MacOS');
   fs.mkdirSync(app, { recursive: true });
@@ -186,11 +170,11 @@ console.log('\n=== T3: 不支持的平台直接跳过 ===');
   // win32 不再是 skip —— 断言它「走到了 Windows 分支」（用空目录必然落到下载前失败，
   // 但 status 一定不是 skip，这就能区分「跳过」和「真在装」）。
   const rw = await mod.ensureAppInstalled({
-    installDir: path.join(ROOT, 'test', '.tmp', 'no-such-win-dir'),
+    installDir: path.join(fixture.dir, 'no-such-win-dir'),
     platform: 'win32', log: () => {}, dryRun: true,
   });
   check('win32 不再走「跳过」分支（Windows 安装已实现）', rw.status !== 'skip', JSON.stringify(rw));
-  fs.rmSync(path.join(ROOT, 'test', '.tmp', 'no-such-win-dir'), { recursive: true, force: true });
+  fs.rmSync(path.join(fixture.dir, 'no-such-win-dir'), { recursive: true, force: true });
 }
 
 console.log('\n=== T4: 架构不认识就不下载 ===');
@@ -263,7 +247,7 @@ console.log('\n=== T5: 真连 GitHub：版本解析 + 下载 + 校验 + 解压 =
         check('校验文件里有本机架构的资产 ' + asset, !!expect);
 
         if (expect) {
-          const zip = path.join(ROOT, 'test', '.tmp', asset);
+          const zip = path.join(fixture.dir, asset);
           fs.mkdirSync(path.dirname(zip), { recursive: true });
           try {
             execFileSync(CURL, ['-sL', '--max-time', '180', '-o', zip, from + asset]);
@@ -280,7 +264,7 @@ console.log('\n=== T5: 真连 GitHub：版本解析 + 下载 + 校验 + 解压 =
             check('parseSums 不会把坏摘要当好的', mod.parseSums(bad + '  ' + asset, asset) === bad);
 
             // 解压并检查包内容
-            const un = path.join(ROOT, 'test', '.tmp', 'unpack');
+            const un = path.join(fixture.dir, 'unpack');
             fs.rmSync(un, { recursive: true, force: true });
             fs.mkdirSync(un, { recursive: true });
             unzip(zip, un);

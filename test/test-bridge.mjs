@@ -6,44 +6,16 @@
 // （lib/index.js），跑在 DSH 的 Node 宿主进程里，与渲染进程无关。
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { createIsolatedModule } from './isolated-module.mjs';
+import { isolateBridgeEnvironment } from './bridge-sandbox.mjs';
+
+const sandbox = isolateBridgeEnvironment();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
-const TMP = path.join(ROOT, 'test', '.tmp', 'bridge');
-
-// ---------------------------------------------------------------------------
-// lib/index.js 静态 import 了 @deepseek-ai/schemastery（宿主提供的依赖），
-// 仓库里没有 node_modules，解析不到。造一个只够构造 Config 的最小替身，
-// 跑完立刻删掉 —— 绝不能长期留在仓库里遮蔽真依赖。
-// ---------------------------------------------------------------------------
-const SHIM_DIR = path.join(ROOT, 'node_modules', '@deepseek-ai', 'schemastery');
-let madeShim = false;
-function ensureSchemasteryShim() {
-  if (fs.existsSync(SHIM_DIR)) return;
-  // 链式 no-op schema：只需要 default/description/step/min/max 存在
-  const node = () => {
-    const s = {};
-    for (const m of ['default', 'description', 'step', 'min', 'max', 'readonly']) {
-      s[m] = () => s;
-    }
-    return s;
-  };
-  fs.mkdirSync(SHIM_DIR, { recursive: true });
-  fs.writeFileSync(
-    path.join(SHIM_DIR, 'package.json'),
-    JSON.stringify({ name: '@deepseek-ai/schemastery', version: '0.0.0-test-shim', type: 'module', main: 'index.js' }, null, 2),
-  );
-  const Z = { object: node, union: node, boolean: node, number: node, natural: node, string: node, const: node };
-  fs.writeFileSync(path.join(SHIM_DIR, 'index.js'), `const node = () => { const s = {}; for (const m of ['default','description','step','min','max','readonly']) s[m] = () => s; return s; };
-export default { object: node, union: node, boolean: node, number: node, natural: node, string: node, const: node };
-`);
-  madeShim = true;
-}
-function dropSchemasteryShim() {
-  if (!madeShim) return;
-  try { fs.rmSync(path.join(ROOT, 'node_modules'), { recursive: true, force: true }); } catch { /* ignore */ }
-}
+const fixture = createIsolatedModule();
+const TMP = path.join(fixture.dir, 'bridge');
 
 let pass = 0, fail = 0;
 const check = (name, cond, extra = '') => {
@@ -51,13 +23,8 @@ const check = (name, cond, extra = '') => {
   else { fail++; console.log('  ❌ ' + name + '  → ' + extra); }
 };
 
-ensureSchemasteryShim();
-let mod;
-try {
-  mod = await import(pathToFileURL(path.join(ROOT, 'lib', 'index.js')).href);
-} finally {
-  dropSchemasteryShim();
-}
+const mod = await fixture.importModule();
+if (!path.resolve(mod.appDataDir()).startsWith(path.resolve(sandbox.dir) + path.sep)) throw new Error('app data escaped sandbox');
 
 const { startBridge, parseSums, releaseArch, appInstallState, BRIDGE_PORT, PLUGIN_VERSION } = mod;
 
@@ -65,13 +32,13 @@ const { startBridge, parseSums, releaseArch, appInstallState, BRIDGE_PORT, PLUGI
 // 端口分配：用一个当前空闲的高位端口，避免撞上真实桥（47311 可能已在跑）
 // ---------------------------------------------------------------------------
 const net = await import('node:net');
-globalThis.__http = await import('node:http');
+globalThis.__http = (await import('node:http')).default;
 function freePort() {
   return new Promise((resolve) => {
     const s = net.createServer();
     s.listen(0, '127.0.0.1', () => {
       const p = s.address().port;
-      s.close(() => resolve(p));
+      s.close(() => resolve(p <= 65524 && (p < 47300 || p > 47322) ? p : freePort()));
     });
   });
 }
@@ -143,6 +110,10 @@ console.log('\n=== T1: 纯函数 ===');
 
   check('BRIDGE_PORT 在合法范围内', BRIDGE_PORT > 1024 && BRIDGE_PORT < 65536, String(BRIDGE_PORT));
   check('PLUGIN_VERSION 已设置', typeof PLUGIN_VERSION === 'string' && PLUGIN_VERSION.length > 0);
+  let blockedFetch = false, blockedHttp = false;
+  try { await fetch('http://127.0.0.1:1/health'); } catch (e) { blockedFetch = /sandbox denied/.test(e.message); }
+  try { await request(1, '/health'); } catch (e) { blockedHttp = /sandbox denied/.test(e.message); }
+  check('隔离层拒绝未拥有端口的 fetch 与 HTTP 请求', blockedFetch && blockedHttp);
 }
 
 // ===========================================================================
@@ -151,6 +122,7 @@ console.log('\n=== T2: 桥起停 + /health ===');
 let bridge = null;
 {
   bridge = await startBridge({ port: base, log: () => {} });
+  if (!bridge || bridge.reused) throw new Error('test bridge not owned');
   check('startBridge 返回实例', !!bridge);
   if (!bridge) { console.log('  ⚠️  桥起不来，后续用例跳过'); }
 
@@ -265,29 +237,23 @@ console.log('\n=== T5: 端口占用与「一机一桥」 ===');
     second === first, second && ('port=' + second.port + ' reused=' + !!second.reused));
   if (first) await first.close();
 
-  // T5c: 跨进程的兄弟桥（同插件、健康）→ 复用而非再起一座。
-  // 用子进程跑 serve-bridge 模拟「另一个运行时里的本插件」。
-  const { spawn } = await import('node:child_process');
+  // T5c: a second isolated module instance models a sibling without spawning
+  // an unguarded child process. Only the test-owned bridge may be probed.
+  const siblingFixture = createIsolatedModule();
+  const siblingMod = await siblingFixture.importModule();
   const p4 = await freePort();
-  const child = spawn(process.execPath,
-    [path.join(ROOT, 'test', 'serve-bridge.mjs'), String(p4)],
-    { stdio: 'ignore', windowsHide: true });
-  let siblingUp = false;
-  for (let i = 0; i < 40 && !siblingUp; i += 1) {
-    await new Promise((r) => setTimeout(r, 150));
-    try { const h = await getJson(p4, '/health'); siblingUp = !!(h.body && h.body.ok); } catch { /* 还没起 */ }
-  }
-  check('子进程的兄弟桥已就绪', siblingUp, 'p4=' + p4);
-  if (siblingUp) {
-    const mine = await startBridge({ port: p4, log: () => {} });
-    check('探测到健康兄弟桥 → 复用（reused 标记）',
-      !!mine && mine.reused === true && mine.port === p4,
-      mine && ('port=' + mine.port + ' reused=' + !!mine.reused));
-    if (mine) await mine.close();   // 复用者不拥有桥：close 不能把兄弟关掉
-    const h2 = await getJson(p4, '/health');
-    check('复用者 close 不误伤兄弟桥', !!(h2.body && h2.body.ok), String(h2.status));
-  }
-  child.kill();
+  const sibling = await siblingMod.startBridge({ port: p4, log: () => {} });
+  if (!sibling || sibling.reused) throw new Error('sibling bridge not owned');
+  check('隔离模块的兄弟桥已就绪', sibling.port === p4, String(sibling.port));
+  const mine = await startBridge({ port: sibling.port, log: () => {} });
+  check('探测到健康兄弟桥 → 复用（reused 标记）',
+    !!mine && mine.reused === true && mine.port === sibling.port,
+    mine && ('port=' + mine.port + ' reused=' + !!mine.reused));
+  if (mine) await mine.close();
+  const h2 = await getJson(sibling.port, '/health');
+  check('复用者 close 不误伤兄弟桥', !!(h2.body && h2.body.ok), String(h2.status));
+  await sibling.close();
+  siblingFixture.cleanup();
 }
 
 // ===========================================================================
@@ -296,13 +262,12 @@ console.log('\n=== T6: close 后端口确实释放 ===');
 if (bridge) {
   const wasPort = bridge.port;
   await bridge.close();
-  let refused = false;
-  try { await request(wasPort, '/health', { timeoutMs: 1500 }); }
-  catch { refused = true; }
-  check('close 之后连不上（不吊着端口）', refused);
+  // The guard rejects closed ports before networking, so inspect the owned
+  // listener registry instead of treating a denied request as proof of close.
+  check('close 后自有监听器确已关闭', !sandbox.permitted(wasPort));
 
   // 端口文件必须在退出时清掉：留着会让 app 往没人监听的端口发请求
-  const pf = path.join(process.env.HOME, 'Library', 'Application Support', 'DSHNotch', 'bridge.json');
+  const pf = bridge.portFile;
   check('端口文件已清理', !fs.existsSync(pf), pf);
 }
 
@@ -350,7 +315,8 @@ console.log('\n=== T8: apply 不炸且能起桥（模拟 Cordis） ===');
     settings: { register: (ns, schema, opts) => { registered.push([ns, !!schema, !!opts]); return { get: () => ({}) }; } },
   };
   let threw = null;
-  try { mod.apply(fakeCtx, {}); } catch (e) { threw = e; }
+  const applyConfig = { bridgePort: await freePort(), autoInstallApp: false, appInstallDir: path.join(sandbox.dir, 'missing-app') };
+  try { mod.apply(fakeCtx, applyConfig); } catch (e) { threw = e; }
   check('apply 不抛错（宿主启动不能被插件带崩）', threw === null, threw && String(threw.message));
   check('apply 注册了 dsh-vibe-island 命名空间', registered.some(r => r[0] === 'dsh-vibe-island'), JSON.stringify(registered));
   check('apply 把桥挂到 ctx 上（可调试/可自测）', !!fakeCtx.vibeIsland);
@@ -358,13 +324,13 @@ console.log('\n=== T8: apply 不炸且能起桥（模拟 Cordis） ===');
   // settings.register 抛错（重复注册）时必须降级而不是崩
   const badCtx = { settings: { register: () => { throw new Error('duplicate namespace'); } } };
   let threw2 = null;
-  try { mod.apply(badCtx, {}); } catch (e) { threw2 = e; }
+  try { mod.apply(badCtx, applyConfig); } catch (e) { threw2 = e; }
   check('settings 抛错时 apply 仍不抛错', threw2 === null, threw2 && String(threw2.message));
 
   // 连 settings 服务都没有（老宿主）也不能崩
   const bareCtx = {};
   let threw3 = null;
-  try { mod.apply(bareCtx, {}); } catch (e) { threw3 = e; }
+  try { mod.apply(bareCtx, applyConfig); } catch (e) { threw3 = e; }
   check('没有 settings 服务时 apply 仍不抛错', threw3 === null, threw3 && String(threw3.message));
 
   for (const c of [fakeCtx, badCtx, bareCtx]) {
@@ -381,3 +347,6 @@ console.log('通过 ' + pass + ' / 失败 ' + fail);
 console.log('='.repeat(44));
 globalThis.__results = globalThis.__results || {};
 globalThis.__results.bridge = { pass, fail };
+fixture.cleanup();
+sandbox.cleanup();
+if (fail) process.exitCode = 1;
