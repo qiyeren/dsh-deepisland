@@ -17,7 +17,11 @@ const SUITES = [
   'monitor.test.js',
   'bridge.test.js',
   'nudges.test.js',
+  'nudge-ack-safety.test.js',
+  'nudge-race.test.js',
+  'nudge-retention.test.js',
   'jump.test.js',
+  'jump-feedback-isolated.test.js',
   'snapshot.test.js',
   'setup-entry.test.js',
   'nudge-ui.test.js',
@@ -74,4 +78,4 @@ if (failed.length) {
   console.log('失败套件: ' + failed.join(', '));
 }
 console.log('='.repeat(52));
-process.exit(totalFail === 0 ? 0 : 1);
+process.exit(totalFail === 0 && failed.length === 0 ? 0 : 1);

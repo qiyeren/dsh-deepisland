@@ -208,8 +208,8 @@ console.log('\n=== U6: 展开列表 —— 行结构 / 增量复用 / 点击 ===
 
   // 点击顺序必须是「先 jump 再 ack」：反过来的表现是「行没了，但 DSH 没切过去」
   const act = fnBody(code.renderer, 'handleNudgeClick');
-  check('点击行 → window.island.jump({ id, label })',
-    /window\.island\.jump\(\{ id, label: item\.label \|\| '' \}\)/.test(act));
+  check('点击行 → jump 携带提醒 id 供主进程捕获',
+    /window\.island\.jump\(\{ id, label: item\.label \|\| '', nudgeId: item\.id \}\)/.test(act));
   check('点击行 → window.island.nudgeAck({ ids: [item.id] })',
     /window\.island\.nudgeAck\(\{ ids: \[item\.id\] \}\)/.test(act));
   check('先 jump 再 ack（顺序反了用户会以为点错）',
@@ -217,8 +217,11 @@ console.log('\n=== U6: 展开列表 —— 行结构 / 增量复用 / 点击 ===
     'jump@' + act.indexOf('window.island.jump(') + ' ack@' + act.indexOf('window.island.nudgeAck('));
   check('jump 用 sessionId 而不是提醒自己的 id（那是 ack 的凭据）',
     /const id = item\.sessionId \|\| ''/.test(act));
-  check('ack 之后本地也移除并重渲染（不等下一拍）',
-    /state\.nudges = state\.nudges\.filter\(\(n\) => n\.id !== item\.id\)[\s\S]{0,80}render\(\)/.test(act));
+  check('等待 bridged 后才 ack；只有 ack 成功才本地移除',
+    /await window\.island\.jump/.test(act) && /result\.kind !== 'bridged'/.test(act)
+      && /await window\.island\.nudgeAck/.test(act) && /ack\.ok === true/.test(act)
+      && /result\.nudgeCaptured !== true/.test(act)
+      && /state\.nudges = state\.nudges\.filter\(\(n\) => n !== item\)[\s\S]{0,80}render\(\)/.test(act));
 
   check('提醒行事件委托挂在 #nudges 上（行复用不重绑）',
     /\$\('nudges'\)\.addEventListener\('click'/.test(code.renderer));

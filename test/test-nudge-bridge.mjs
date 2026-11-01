@@ -9,39 +9,22 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { createIsolatedModule } from './isolated-module.mjs';
+import { isolateBridgeEnvironment } from './bridge-sandbox.mjs';
+
+const sandbox = isolateBridgeEnvironment();
 
 globalThis.__http = http;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 
-// lib/index.js 静态 import 了宿主提供的 @deepseek-ai/schemastery，仓库里没有
-// node_modules 解析不到 —— 与 test-bridge.mjs 共用同一份最小替身，跑完删掉。
-const SHIM_DIR = path.join(ROOT, 'node_modules', '@deepseek-ai', 'schemastery');
-function ensureShim() {
-  if (fs.existsSync(SHIM_DIR)) return false;
-  fs.mkdirSync(SHIM_DIR, { recursive: true });
-  fs.writeFileSync(
-    path.join(SHIM_DIR, 'package.json'),
-    JSON.stringify({ name: '@deepseek-ai/schemastery', version: '0.0.0-test-shim', type: 'module', main: 'index.js' }, null, 2),
-  );
-  fs.writeFileSync(path.join(SHIM_DIR, 'index.js'), `const node = () => { const s = {}; for (const m of ['default','description','step','min','max','readonly']) s[m] = () => s; return s; };
-export default { object: node, union: node, boolean: node, number: node, natural: node, string: node, const: node };
-`);
-  return true;
-}
-const madeShim = ensureShim();
-process.on('exit', () => {
-  if (madeShim) {
-    try { fs.rmSync(path.join(ROOT, 'node_modules'), { recursive: true, force: true }); } catch { /* ignore */ }
-  }
-});
-
-const mod = await import(pathToFileURL(path.join(ROOT, 'lib', 'index.js')).href);
+const fixture = createIsolatedModule();
+const mod = await fixture.importModule();
+if (!path.resolve(mod.appDataDir()).startsWith(path.resolve(sandbox.dir) + path.sep)) throw new Error('app data escaped sandbox');
 const { startBridge, PLUGIN_VERSION } = mod;
-// 提醒语义在 lib/nudge.js，不在 index.js 的导出表里（index 只 re-export 桥相关件）
-const { NudgeCenter, attachNudges } = await import(pathToFileURL(path.join(ROOT, 'lib', 'nudge.js')).href);
+const { NudgeCenter, attachNudges } = await fixture.importModule('nudge.js');
 
 let pass = 0;
 let fail = 0;
@@ -59,7 +42,7 @@ function freePort() {
     s.on('error', reject);
     s.listen(0, '127.0.0.1', () => {
       const p = s.address().port;
-      s.close(() => resolve(p));
+      s.close(() => resolve(p <= 65524 && (p < 47300 || p > 47322) ? p : freePort()));
     });
   });
 }
@@ -109,7 +92,8 @@ const bridge = await startBridge({
   installState: () => ({ status: 'test' }),
 });
 
-check('桥已起（远离默认端口段）', bridge !== null && bridge.port >= 1024, String(base));
+if (!bridge || bridge.reused) throw new Error('test bridge not owned');
+check('桥已起（远离默认端口段）', bridge.port >= 1024, String(base));
 
 // ===========================================================================
 console.log('\n=== B1: 提醒端点在没有队列时也要干净降级 ===');
@@ -138,7 +122,7 @@ console.log('\n=== B2: 接上真队列后，条目与 ack 端到端 ===');
   const s = makeCtx(cfg);
 
   // 独立起一座带队列的桥（不复用上面那座：startBridge 按端口缓存，换端口最干净）
-  const port = base + 1;
+  const port = await freePort();
   const live = await startBridge({
     port,
     log: () => {},
@@ -150,7 +134,8 @@ console.log('\n=== B2: 接上真队列后，条目与 ack 端到端 ===');
       config: () => ({ enabled: true, maxItems: 4, onCompleted: true, onFailed: true, onChoice: true }),
     },
   });
-  check('带队列的桥已起', live !== null, String(port));
+  if (!live || live.reused) throw new Error('queue bridge not owned');
+  check('带队列的桥已起', true, String(port));
 
   s.emitTurnEnd('completed', 'session-a');
   s.emitTurnEnd('error', 'session-a');
@@ -197,11 +182,12 @@ console.log('\n=== B2: 接上真队列后，条目与 ack 端到端 ===');
 
   // 语义层抛错时端点不能 500
   const boom = await startBridge({
-    port: port + 1,
+    port: await freePort(),
     log: () => {},
     nudges: { list: () => { throw new Error('boom'); }, rev: () => { throw new Error('boom'); }, ack: () => { throw new Error('boom'); } },
   });
-  check('语义层抛错时桥仍起得来', boom !== null);
+  if (!boom || boom.reused) throw new Error('error bridge not owned');
+  check('语义层抛错时桥仍起得来', true);
   const br = await request(boom.port, '/nudges');
   check('语义层抛错时 /nudges 回 200 + 空列表', br.status === 200 && br.body.items.length === 0, `${br.status} ${br.text.slice(0, 120)}`);
 
@@ -233,3 +219,6 @@ if (fail > 0) {
 }
 globalThis.__results = globalThis.__results || {};
 globalThis.__results['nudge-bridge'] = { pass, fail };
+fixture.cleanup();
+sandbox.cleanup();
+if (fail) process.exitCode = 1;
