@@ -8,6 +8,10 @@ import { createIsolatedModule } from './isolated-module.mjs';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const outer = fs.mkdtempSync(path.join(os.tmpdir(), 'deepisland-isolation-check-'));
+const previousLocalAppData = process.env.LOCALAPPDATA;
+// The installer also checks its standard fallback directory; contain it before
+// importing or exercising the copied module, not merely its first candidate.
+process.env.LOCALAPPDATA = path.join(outer, 'local');
 try {
   const sentinel = path.join(outer, 'sentinel');
   fs.writeFileSync(sentinel, 'untouched');
@@ -30,10 +34,25 @@ try {
   fs.writeFileSync(path.join(full, 'DSHNotch.exe'), 'fake');
   fs.writeFileSync(path.join(full, 'resources', 'app.asar'), 'fake');
   const calls = [];
-  const installed = await mod.ensureAppInstalled({
-    installDir: full, platform: 'win32', existingOnly: true, launch: true, log() {},
-    spawnImpl: (...args) => { calls.push(args); return { on() {}, unref() {} }; },
-  });
+  const originals = { statSync: fs.statSync, readFileSync: fs.readFileSync };
+  const violations = [];
+  let installed;
+  try {
+    for (const name of Object.keys(originals)) fs[name] = (file, ...args) => {
+      const resolved = path.resolve(String(file));
+      const inside = dir => resolved === dir || resolved.startsWith(dir + path.sep);
+      if (!inside(a.dir) && !inside(outer)) {
+        violations.push(resolved);
+        throw new Error('non-fixture file access forbidden');
+      }
+      return originals[name].call(fs, file, ...args);
+    };
+    installed = await mod.ensureAppInstalled({
+      installDir: full, platform: 'win32', existingOnly: true, launch: true, log() {},
+      spawnImpl: (...args) => { calls.push(args); return { on() {}, unref() {} }; },
+    });
+  } finally { Object.assign(fs, originals); }
+  assert.deepEqual(violations, [], 'installer must never inspect a non-fixture path');
   assert.equal(installed.status, 'pair-mismatch');
   assert.equal(calls.length, 0);
   a.cleanup();
@@ -50,5 +69,7 @@ try {
   }
   console.log('Isolation regression passed: separate fixtures, imported copied source, and cleanup confined to owned directories.');
 } finally {
+  if (previousLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+  else process.env.LOCALAPPDATA = previousLocalAppData;
   fs.rmSync(outer, { recursive: true, force: true });
 }

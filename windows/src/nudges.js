@@ -119,6 +119,9 @@ function normalizeItem(raw) {
 
   return {
     id,
+    // Optional for backwards compatibility; never infer lineage from sessionId.
+    lineageId: typeof raw.lineageId === 'string' && /^[0-9a-f-]{36}$/i.test(raw.lineageId) ? raw.lineageId : '',
+    generation: Number.isSafeInteger(raw.generation) && raw.generation > 0 ? raw.generation : 0,
     kind,
     severity,
     sessionId: typeof raw.sessionId === 'string' ? raw.sessionId.trim() : '',
@@ -288,6 +291,7 @@ async function acknowledgeItems(ids, effects) {
   if (!list.length) return { ok: false, remaining: effects.getItems().length };
   effects.invalidate();
   let ok = true;
+  let failureReason = '';
   for (const id of list) {
     let result;
     try { result = await effects.ack([id]); } catch { result = { ok: false, reason: 'network' }; }
@@ -296,14 +300,20 @@ async function acknowledgeItems(ids, effects) {
       effects.setItems(effects.getItems().filter((item) => item.id !== id));
     } else {
       ok = false;
+      // Only expose fixed diagnostic categories, never server text or reminder data.
+      const reason = result && result.ok === true && result.removed === 0
+        ? 'not-found'
+        : (result && ['network', 'timeout', 'http', 'json', 'plugin', 'not-ok', 'invalid-removed', 'empty'].includes(result.reason)
+          ? result.reason : 'unknown');
+      if (!failureReason) failureReason = reason;
       effects.retain(id);
-      effects.warn((result && result.reason) || 'zero-or-invalid-removed');
+      effects.warn(reason);
     }
   }
   effects.invalidate();
   effects.notify();
   effects.refresh();
-  return { ok, remaining: effects.getItems().length };
+  return { ok, remaining: effects.getItems().length, reason: failureReason };
 }
 
 module.exports = {

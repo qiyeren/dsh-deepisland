@@ -60,6 +60,10 @@ async function testMainPolicy() {
     assert.deepEqual(Array.from(f.items, (x) => x.id), ['old', 'keep']);
     assert.deepEqual(f.calls, ['invalidate', 'warn', 'invalidate', 'notify', 'refresh']);
   }
+  const missing = fixture(async () => ({ ok: true, removed: 0 }));
+  assert.equal((await acknowledgeItems(['old'], missing.effects)).reason, 'not-found');
+  const disconnected = fixture(async () => ({ ok: false, reason: 'network' }));
+  assert.equal((await acknowledgeItems(['old'], disconnected.effects)).reason, 'network');
   const waiting = deferred();
   const f = fixture(async () => waiting.promise);
   const pending = acknowledgeItems(['old'], f.effects);
@@ -141,6 +145,9 @@ async function testRenderer() {
     await c.click({ id: 'old', sessionId: 'session' });
     assert.equal(c.state.nudges.length, 2);
   }
+  const diagnose = rendererFixture(async () => ({ kind: 'bridged', nudgeCaptured: true }), async () => ({ok: false, reason: 'not-found'}));
+  await diagnose.click({id: 'old', sessionId: 'session'});
+  assert.match(diagnose.state.dshHint, /编号不存在/);
   let rejectedAck = false;
   const stale = rendererFixture(async () => ({ kind: 'bridged', nudgeCaptured: false }), async () => { rejectedAck = true; });
   await stale.click({ id: 'old', sessionId: 'session' });

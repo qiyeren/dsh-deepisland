@@ -650,7 +650,14 @@
         state.nudges = state.nudges.filter((n) => n !== item);
         render();
       } else {
-        state.dshHint = ackRejected ? '提醒确认失败，请刷新后重试' : '提醒确认失败，已保留并刷新';
+        // Diagnostic categories only: never include IDs, titles, or response text.
+        const reason = ack && ack.reason;
+        state.dshHint = reason === 'not-found' ? '确认失败：编号不存在，已保留'
+          : reason === 'network' || reason === 'timeout' ? '确认失败：连接异常，已保留'
+          : reason === 'http' ? '确认失败：接口拒绝，已保留'
+          : reason === 'plugin' || reason === 'json' || reason === 'not-ok' || reason === 'invalid-removed'
+            ? '确认失败：接口响应异常，已保留'
+            : ackRejected ? '提醒确认失败，请刷新后重试' : '提醒确认失败，已保留并刷新';
         state.dshHintFailed = true;
         clearTimeout(state.dshTimer);
         state.dshTimer = setTimeout(() => { state.dshHint = null; render(); }, RESULT_HOLD_MS);
