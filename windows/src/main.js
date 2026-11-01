@@ -694,7 +694,15 @@ function probeNudges(cfg) {
     let retired = false;
     const now = Date.now();
     for (const [id, item] of retainedNudges) {
-      if (now - item._retainedAt >= 24 * 60 * 60 * 1000) {
+      // A confirmed newer generation represents this same merged event. Drop
+      // only the obsolete local copy, never acknowledge the new server item.
+      // Missing lineage (older servers), equal generations and other owners
+      // are intentionally conservative: keep the fallback as before.
+      const superseded = typeof item.lineageId === 'string' && item.lineageId !== ''
+        && Number.isSafeInteger(item.generation) && item.generation > 0
+        && r.items.some((next) => next.id !== id && next.lineageId === item.lineageId
+          && Number.isSafeInteger(next.generation) && next.generation > item.generation);
+      if (superseded || now - item._retainedAt >= 24 * 60 * 60 * 1000) {
         retainedNudges.delete(id);
         retired = true;
       }

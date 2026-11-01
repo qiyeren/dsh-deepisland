@@ -49,7 +49,7 @@ nudge 的真正价值是**事件语义**（三类、严重度、合并、静音�
 
 ### 1.2 合并与去重
 
-- 合并窗口 `mergeWindowMs`（默认 1200）：窗口内同 `(kind, sessionId)` 的重复事件累加 `count`，并将条目 ID 轮换为新 UUID；旧快照的确认不会删除合并后的新版本。
+- 合并窗口 `mergeWindowMs`（默认 1200）：窗口内同 `(kind, sessionId)` 的重复事件累加 `count`，并将条目 ID 轮换为新 UUID；旧快照的确认不会删除合并后的新版本。每组同时持有独立的随机 `lineageId` 和递增 `generation`，用于辨别合并代次；它们不是身份认证凭据。
 - 队列上限 `maxItems` 之外的旧条目丢弃（按 `ts` 先进先出）
 - 同一条目 TTL 30 分钟；`ack` 立即移除
 
@@ -68,6 +68,8 @@ POST /nudge/ack
 ```json
 {
   "id": "0f3d5c70-7789-4c80-88c2-e14a42211111",
+  "lineageId": "a42d5c70-7789-4c80-88c2-e14a42222222",
+  "generation": 1,
   "kind": "completed | needs_choice | failed",
   "severity": 0,
   "sessionId": "session-abc",
@@ -124,7 +126,7 @@ nudges: [ { id, kind, severity, sessionId, label, detail, at, count } ]
 - 折叠态：`#c-nudge` 徽标（`is-off` 时隐藏），文本按最严重那类取符号 + 计数：`needs_choice` → `?N`、`failed` → `!N`、`completed` → `✔N`
 - 岛体根节点新增 `data-nudge="none|choice|failed|done"`
 - `--glow` **仍由 renderer 唯一写入**：`needs_choice` 覆盖为琥珀 `#F5A623`；`failed` 且当前 `status !== 'waiting'` 覆盖为红 `#E74C3C`；其余维持原状态色
-- 展开 HUD：`#nudges` 区块（空则 `is-off`），每行 = 类色条 + `label` + `detail` + `at`；点击后通过 `window.island.jump({ id, label, nudgeId })` 让主进程先捕获当前快照项；只有捕获成功且跳转请求入队（`kind === 'bridged'`）后才逐条调用 `window.island.nudgeAck({ ids: [item.id] })`。确认失败或没有移除时尝试在本地保留并刷新；入队和确认均不证明会话已打开。本地保留仅在进程内有效，可能重复；实时提醒占满显示上限时，保留项可能持续不可见，应用重启后也不会恢复。保留副本至多 128 条，超出时淘汰最早条目；首次保留满 24 小时后，在下次成功拉取时移除副本。离线期间不按时间清除，移除副本不会确认或删除服务端提醒；系统时钟变化会影响保留时长。
+- 展开 HUD：`#nudges` 区块（空则 `is-off`），每行 = 类色条 + `label` + `detail` + `at`；点击后通过 `window.island.jump({ id, label, nudgeId })` 让主进程先捕获当前快照项；只有捕获成功且跳转请求入队（`kind === 'bridged'`）后才逐条调用 `window.island.nudgeAck({ ids: [item.id] })`。确认失败或没有移除时尝试在本地保留并刷新；入队和确认均不证明会话已打开。本地保留仅在进程内有效，可能重复；实时提醒占满显示上限时，保留项可能持续不可见，应用重启后也不会恢复。保留副本至多 128 条，超出时淘汰最早条目；首次保留满 24 小时后，在下次成功拉取时移除副本；若成功拉取到同一随机 lineage 且代数严格更高的合并条目，也只替换旧本地副本，不确认新条目。旧协议缺少 lineage、不同 lineage 或代数无法证明更新时，仍保留副本。离线期间不按时间清除，移除副本不会确认或删除服务端提醒；系统时钟变化会影响保留时长。
 - 样式：三色常量只定义一次；循环动画受 `data-glow="0"` 与 `prefers-reduced-motion` 双门控（与既有纪律一致）
 
 ## §3 测试要求
@@ -132,7 +134,7 @@ nudges: [ { id, kind, severity, sessionId, label, detail, at, count } ]
 - 数据层：`windows/test/nudges.test.js` 进 `test/run.js` 默认套件（fake http/fetch，桥缺失降级、插件名不符拒绝、rev 去重、截断）
 - 快照：扩展既有 `snapshot.test.js` —— `nudges` 变化必须改 `rev`，`nudges` 为空时 rev 稳定
 - UI：`windows/test/nudge-ui.test.js` —— `index.html` 有 `#c-nudge` / `#nudges`、三色 CSS 各定义一次、`data-nudge` 四态、`--glow` 仍只由 renderer 写
-- Host：`node test/run.mjs` 全绿；`/nudges` 与 `/nudge/ack` 走 `test-bridge.mjs` 同款起服务断言
+- Host：使用隔离测试覆盖 `/nudges`、`/nudge/ack`、旧世代确认和配套校验；例如 `node --test test/test-ack-integration-memory.mjs test/test-nudge-ack-safety.mjs test/test-windows-pairing-isolated.mjs`。不要直接在有真实 profile 的机器运行旧默认套件；部分旧测试尚未完成安全隔离。mock 测试不等同于真实 GUI 验收。
 
 ## §4 已知边界（**不许装作能做到**）
 

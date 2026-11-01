@@ -62,5 +62,28 @@ const ids = () => Array.from(vm.runInContext('nudgeItems', context), x => x.id);
   assert.equal(vm.runInContext('retainedNudges.size', context), 128, 'retained fallback cache has a hard bound');
   assert.equal(vm.runInContext("retainedNudges.has('id0')", context), false, 'oldest copy is evicted');
   assert.equal(vm.runInContext("retainedNudges.has('id139')", context), true, 'newest copy is retained');
-  console.log('通过 4 / 失败 0');
+
+  // A strictly newer generation of the *same opaque lineage* supersedes the
+  // local display copy only. Unrelated or unverifiable IDs must be retained.
+  vm.runInContext("retainedNudges.clear(); nudgeItems=[{id:'stale',lineageId:'lineage-a',generation:1,sessionId:'s',severity:1,ts:1}]", context);
+  await handlers['island:nudge-ack'](null, { ids: ['stale'] }); await Promise.resolve();
+  fetched = [{id:'fresh',lineageId:'lineage-a',generation:2,sessionId:'s',severity:1,ts:2}]; revision = 'successor';
+  await probe();
+  assert.deepEqual(ids(), ['fresh'], 'newer matching lineage replaces stale local display copy');
+  assert.equal(vm.runInContext("retainedNudges.has('stale')", context), false);
+  assert.deepEqual(fetched.map(item => item.id), ['fresh'], 'successor is not acknowledged or mutated');
+  vm.runInContext("retainedNudges.clear(); nudgeItems=[{id:'keep',lineageId:'lineage-a',generation:2,sessionId:'s',severity:1,ts:1}]", context);
+  await handlers['island:nudge-ack'](null, { ids: ['keep'] }); await Promise.resolve();
+  fetched = [{id:'other',lineageId:'lineage-b',generation:3,sessionId:'s',severity:1,ts:2}]; revision = 'other';
+  await probe();
+  assert.ok(ids().includes('keep'), 'same session across different lineages is never enough');
+  fetched = [{id:'other',lineageId:'lineage-a',generation:2,sessionId:'s',severity:1,ts:2}]; revision = 'equal';
+  await probe();
+  assert.ok(ids().includes('keep'), 'equal generation is not proof of a successor');
+  fetched = [{id:'other',sessionId:'s',severity:1,ts:2}]; revision = 'legacy';
+  await probe();
+  assert.ok(ids().includes('keep'), 'legacy server without lineage cannot retire a copy');
+  offline = true; fetched = [{id:'fresh',lineageId:'lineage-a',generation:3,sessionId:'s',severity:1,ts:3}]; await probe();
+  assert.ok(ids().includes('keep'), 'offline failure cannot retire a copy');
+  console.log('通过 9 / 失败 0');
 })().catch(error => { console.error(error); process.exitCode = 1; });
