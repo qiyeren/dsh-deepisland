@@ -371,6 +371,7 @@
 
     if (expanded) renderHud(entries, primary);
     else renderCompact(entries, primary);
+    renderUrgentIsland();
 
     updateHint();
     scheduleClock();
@@ -623,6 +624,37 @@
       const current = host.children[i];
       if (current !== row.node) host.insertBefore(row.node, current || null);
     });
+  }
+
+  // Count distinct sessions; live waiting state wins over a failed event.
+  // A click navigates only: this independent view never acknowledges a reminder.
+  function urgentItems() {
+    const bySession = new Map();
+    for (const e of state.entries) {
+      if (e && e.id && e.status === 'waiting') bySession.set(e.id, { id: e.id, label: e.label || e.shortId || '会话', kind: 'choice' });
+    }
+    for (const n of state.nudges) {
+      if (!n || !n.sessionId || (n.kind !== 'needs_choice' && n.kind !== 'failed')) continue;
+      const old = bySession.get(n.sessionId);
+      if (!old || (old.kind === 'failed' && n.kind === 'needs_choice')) {
+        bySession.set(n.sessionId, { id: n.sessionId, label: n.label || '会话', kind: n.kind === 'needs_choice' ? 'choice' : 'failed' });
+      }
+    }
+    return [...bySession.values()].sort((a, b) => (a.kind === 'choice' ? 0 : 1) - (b.kind === 'choice' ? 0 : 1));
+  }
+
+  function renderUrgentIsland() {
+    const node = $('urgent-island');
+    if (!node) return;
+    const items = urgentItems();
+    const first = items[0];
+    setHidden(node, !first);
+    if (!first) return;
+    setAttr(node, 'data-kind', first.kind);
+    setText($('urgent-kind'), first.kind === 'choice' ? '等待处理' : '执行失败');
+    setText($('urgent-label'), first.label);
+    setText($('urgent-more'), items.length > 1 ? '+' + (items.length - 1) : '');
+    setAttr(node, 'aria-label', '跳转到' + first.label);
   }
 
   /** `bridged` means enqueued, not that the client actually navigated. */
@@ -919,6 +951,13 @@
   function evaluatePointer() {
     if (!state.pointer) return;
     const over = hitIsland(state.pointer.x, state.pointer.y);
+    const child = $('urgent-island');
+    let overChild = false;
+    if (child && !child.classList.contains('is-off')) {
+      const r = child.getBoundingClientRect();
+      overChild = state.pointer.x >= r.left && state.pointer.x <= r.right && state.pointer.y >= r.top && state.pointer.y <= r.bottom;
+    }
+    setInteractive(over || overChild);
     if (over === state.overIsland) return;
     state.overIsland = over;
 
@@ -933,7 +972,6 @@
     } else {
       // 出岛：宽限一会儿再收起（防手抖），但立刻交还穿透 ——
       // 否则岛外的透明区域会继续吞下方应用的点击
-      setInteractive(false);
       state.hoverCloseTimer = setTimeout(() => {
         if (!state.overIsland) render();
       }, HOVER_CLOSE_MS);
@@ -1050,7 +1088,7 @@
 
   /** 这些区域有自己的点击语义，按下不应启动拖窗。 */
   function isClickControl(target) {
-    return !!(target && target.closest && target.closest('[data-act], .row, #detail, #stats, .nudge'));
+    return !!(target && target.closest && (target.closest('[data-act], .row, #detail, #stats, .nudge') || target.closest('#urgent-island')));
   }
 
   function onDragDown(ev) {
@@ -1125,6 +1163,13 @@
       const id = row.getAttribute('data-id');
       const item = state.nudges.find((x) => x.id === id);
       if (item) handleNudgeClick(item);
+    });
+
+    const urgent = $('urgent-island');
+    if (urgent) urgent.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const item = urgentItems()[0];
+      if (item) jumpTo(item);
     });
 
     // 右键：原生菜单（钉住/隐藏/设置/配置目录/退出）
