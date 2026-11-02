@@ -1080,6 +1080,9 @@ html, body {
   flex: 0 0 auto;
 }
 
+/* The expanded island focuses on sessions and reminders. Settings and bridge
+ * status remain available from the tray; jump feedback stays in the header. */
+.hud .stats, .hud .footer { display: none; }
 .footer:empty { display: none; }
 
 .footer .foot-left {
