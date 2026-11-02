@@ -115,7 +115,10 @@ const JUMP_HOLD_MS = 6000;
  * 比最大内容（岛体最宽 436）大一圈的部分是 **bleed**：给外发光留绘制
  * 空间。窗口平时鼠标穿透，多出来的透明区域不吞下方应用的点击。
  */
-const MAX_WINDOW = { w: 484, h: 300 };
+// The HUD can contain six session rows and up to eight nudge rows at once.
+// 300px clipped the footer and rounded lower edge; keep window geometry fixed
+// during animations while reserving space for the expanded content and glow.
+const MAX_WINDOW = { w: 484, h: 500 };
 
 let win = null;
 let tray = null;
