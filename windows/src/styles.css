@@ -258,6 +258,31 @@ html, body {
   border-radius: 0 0 var(--r-expanded) var(--r-expanded);
 }
 
+/* 独立视觉胶囊；位于裁剪层之外，仍随主岛缩放和移动。 */
+.urgent-island {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(330px, 95%);
+  height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 19px;
+  background: #171717;
+  color: #fff;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.urgent-kind { color: #ffb547; flex: 0 0 auto; }
+.urgent-island[data-kind="failed"] .urgent-kind { color: #ff776e; }
+.urgent-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; text-align: left; }
+.urgent-more { color: rgba(255,255,255,.7); flex: 0 0 auto; }
+
 /* 外发光：沿剪影的一圈柔光。**独立伪元素**是本文件最重要的一条性能取舍：
  * v1 直接在 .island 上 transition box-shadow，软件渲染每帧重绘一圈模糊，
  * 展开时掉帧；改成「阴影常驻、只动 opacity」后状态切换是合成器动画。
