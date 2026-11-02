@@ -331,7 +331,7 @@ console.log('\n=== P8: 提醒（nudges）—— 字段白名单 / 降级 / rev =
 
   const one = withNudges([nudge()]);
   check('一条合法提醒进 DTO', one.nudges.length === 1, String(one.nudges.length));
-  check('DTO 只有契约 §2.1 的八个字段',
+  check('DTO 只含提醒白名单字段（含 atMs）',
     JSON.stringify(Object.keys(one.nudges[0]).sort()) === JSON.stringify(S.NUDGE_FIELDS.slice().sort()),
     Object.keys(one.nudges[0]).join(','));
   check('整份 payload 里不出现 title / project 键（提醒只发 label）',
@@ -345,6 +345,10 @@ console.log('\n=== P8: 提醒（nudges）—— 字段白名单 / 降级 / rev =
     S.mapNudge(nudge({ detail: 'x'.repeat(200) })).detail.length <= 120);
   check('count 缺省至少 1（合并语义下「一条提醒」本就算一次）',
     S.mapNudge(nudge({ count: 0 })).count === 1 && S.mapNudge(nudge({ count: 3 })).count === 3);
+  check('绝对时间随快照透传，缺失及非法时间统一为 0',
+    one.nudges[0].atMs === NOW && S.mapNudge(nudge({ atMs: undefined })).atMs === 0 &&
+    S.mapNudge(nudge({ atMs: Infinity })).atMs === 0 && S.mapNudge(nudge({ atMs: -1 })).atMs === 0);
+  check('提醒绝对时间变化更新 rev', withNudges([nudge({ atMs: NOW + 1 })]).rev !== one.rev);
 
   // 三个降级分支，全都不许抛
   const notArray = withNudges('not-an-array');

@@ -460,7 +460,7 @@
 
   function renderCompact(entries, primary) {
     setCssVar($('c-dot'), '--dot', (primary && primary.glow) || GLOW_IDLE);
-    setText($('c-title'), primary ? (primary.label || primary.shortId || '会话') : '没有活跃会话');
+    setText($('c-title-text'), primary ? (primary.label || primary.shortId || '会话') : '没有活跃会话');
     renderNudgeBadge(mainNudges());
 
     // 胶囊位：多会话 → 在跑/总数（Mac rectangle.stack.fill）；
@@ -626,7 +626,22 @@
     // 渲染层**不再截断**：条数上限来自配置（nudgeMaxItems，1..8），已由主进程
     // 按它裁过一次。这里再写一个 4 会与配置打架 —— 用户把它调到 6，界面却只
     // 显示 4 条，而「为什么少了两条」在界面上没有任何线索。
-    const items = Array.isArray(list) ? list : [];
+    // Display at most one reminder per identified session, without altering the queue.
+    const items = [];
+    const positions = new Map();
+    for (const item of Array.isArray(list) ? list : []) {
+      if (!item || !item.id) continue;
+      const sid = typeof item.sessionId === 'string' ? item.sessionId : '';
+      if (!sid || !positions.has(sid)) {
+        if (sid) positions.set(sid, items.length);
+        items.push(item);
+      } else {
+        const index = positions.get(sid);
+        const previous = items[index];
+        if (Number.isFinite(item.atMs) && item.atMs > 0 &&
+            (!Number.isFinite(previous.atMs) || item.atMs > previous.atMs)) items[index] = item;
+      }
+    }
     setHidden(host, items.length === 0);
 
     const keep = new Set(items.map((it) => it && it.id).filter(Boolean));
@@ -763,8 +778,10 @@
     setClass(row.node, 'focused', index === state.focusIndex);
     setAttr(row.node, 'data-status', entry.status || 'idle');
     setText(row.label, entry.label || entry.shortId || '');
-    setText(row.action, entry.actionText || entry.tag || '');
-    setText(row.tag, entry.tag || '');
+    // Keep a single Chinese activity label in the former tag slot.
+    setText(row.action, '');
+    const statusText = { idle: '待命', thinking: '深度思考中', tool: '执行中', waiting: '等待确认', done: '已完成' };
+    setText(row.tag, entry.actionText || statusText[entry.status] || '');
     setText(row.elapsed, isLive(entry.status) ? (elapsedTextOf(entry) || '--:--') : '--:--');
     setAttr(row.node, 'aria-label', '跳转到 ' + (entry.label || entry.shortId || '会话'));
   }
