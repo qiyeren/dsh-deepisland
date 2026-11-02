@@ -31,6 +31,25 @@ function setup(handler, initial = {}) {
   return { api: exported, calls, timers, data, cleanups, get updates() { return updates; }, tick: () => { for (const [id, timer] of [...timers]) { if (!timers.has(id)) continue; if (timer.once) timers.delete(id); timer.fn(); } } };
 }
 
+test('settings card uses theme colors for text, surface and controls', () => {
+  const env = setup(() => Promise.resolve(response({ config: { bridgeEnabled: false } })));
+  let card;
+  env.api.apply({ slots: { inject: (_name, fn) => fn(), register: (spec, component) => { if (spec.id === 'dsh-vibe-island-settings') card = component; } }, on() {} });
+  assert.equal(typeof card, 'function');
+  const styles = [];
+  const walk = (node) => {
+    if (Array.isArray(node)) return node.forEach(walk);
+    if (!node || typeof node !== 'object') return;
+    if (typeof node.type === 'function') return walk(node.type(node.props));
+    if (node.props?.style) styles.push(node.props.style);
+    walk(node.children);
+  };
+  walk(card({}));
+  assert.ok(styles.some(s => s.background?.includes('--dsw-alias-settings-card-fill')));
+  assert.ok(styles.filter(s => s.color).every(s => s.color.includes('--dsw-alias-')), 'every explicit text color follows theme');
+  assert.ok(styles.filter(s => s.background).every(s => s.background.includes('--dsw-alias-')), 'controls follow theme background');
+});
+
 test('configuration uses same-origin independently of bridge and reports failure', async () => {
   const env = setup((url, options) => Promise.resolve(options.method === 'POST' ? response({ error: 'denied' }, 403) : response({ ok: true, config: { notchEnabled: false } })));
   assert.equal((await env.api.loadConfig(null)).notchEnabled, false);
