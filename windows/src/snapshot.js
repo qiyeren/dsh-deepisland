@@ -80,7 +80,7 @@ const ENTRY_FIELDS = [
 const ENTRY_ALWAYS = ['id', 'label', 'shortId', 'status', 'live', 'glow', 'tag', 'badge'];
 
 /**
- * 提醒条目的 DTO 白名单（`docs/nudge-fusion.md` §2.1 写死的那八个字段）。
+ * 提醒条目的 DTO 白名单（包括用于按会话选最新提醒的时间戳）。
  *
  * 与 entry 的规则相反：这里**每个键都恒有**，不做「空值省略」。理由不是
  * 体积（一屏最多 4 条），而是 `rev`：提醒是「有 / 没有」这种一刀切的变化，
@@ -88,7 +88,7 @@ const ENTRY_ALWAYS = ['id', 'label', 'shortId', 'status', 'live', 'glow', 'tag',
  * 的 rev → 白推一跳。契约也明确要求空列表仍是 `[]` 而不是缺字段。
  */
 const NUDGE_FIELDS = [
-  'id', 'kind', 'severity', 'sessionId', 'label', 'detail', 'at', 'count',
+  'id', 'kind', 'severity', 'sessionId', 'label', 'detail', 'at', 'atMs', 'count',
 ];
 
 /** 三类提醒（与服务端 `lib/nudge.js` 的 KINDS 同值）。 */
@@ -265,6 +265,8 @@ function mapNudge(raw) {
       return (d.length <= 120) ? d : d.slice(0, 119) + '…';
     })(),
     at: typeof raw.at === 'string' ? raw.at : '',
+    // Preserve the absolute time for display-only newest-per-session selection.
+    atMs: num(raw.atMs) > 0 ? raw.atMs : 0,
     count: Math.max(1, count(raw.count)),
   };
 }

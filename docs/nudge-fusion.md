@@ -115,10 +115,10 @@ POST /nudge/ack
 - `windows/src/snapshot.js`：`buildSnapshot` 入参增加 `nudges`，作为**顶层字段**进 payload（同时进 `rev` 计算）；白名单 DTO：
 
 ```js
-nudges: [ { id, kind, severity, sessionId, label, detail, at, count } ]
+nudges: [ { id, kind, severity, sessionId, label, detail, at, atMs, count } ]
 ```
 
-`label` = `title || shortId`（渲染层不再做 fallback）；`detail` 已在主进程截断到 ≤120 字。
+`label` = `title || shortId`（渲染层不再做 fallback）；`detail` 已在主进程截断到 ≤120 字。`atMs` 为正数毫秒时间戳，缺失或无效时为 0，始终保留该字段以稳定快照结构。展开面板中，同一会话仅展示一条普通提醒：优先展示时间戳最大的条目；均缺少时间戳或时间相同时保留输入顺序中的第一条。这只影响显示，不确认、不删除服务端提醒；无会话 ID 的条目不参与去重。
 空数组时该字段仍是空数组（稳定序列化，不影响 rev 抖动）。
 
 ### 2.2 UI
