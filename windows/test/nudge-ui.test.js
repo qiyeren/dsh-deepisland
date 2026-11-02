@@ -99,7 +99,7 @@ console.log('=== U1: DOM 骨架（#c-nudge / #nudges / data-nudge ===');
 console.log('\n=== U2: data-nudge 四态 + 三档颜色变量各定义一次 ===');
 {
   check('renderer 写 data-nudge 到 #island',
-    /setAttr\(island, 'data-nudge', nudgeKindOf\(state\.nudges\)\)/.test(code.renderer),
+    /setAttr\(island, 'data-nudge', nudgeKindOf\(mainNudges\(\)\)\)/.test(code.renderer),
     (code.renderer.match(/setAttr\(island, 'data-nudge'[^)]*\)/g) || [''])[0]);
   check('nudgeKindOf 只产出四态 none|choice|failed|done',
     /return 'none'/.test(code.renderer) && /return 'choice'/.test(code.renderer)
@@ -175,7 +175,7 @@ console.log('\n=== U5: 折叠徽标 —— ?N / !N / ✔N，N 是 count 之和 =
     /setAttr\(badge, 'data-kind', kind\)/.test(code.renderer)
       && /setAttr\(badge, 'aria-label', kindLabel\(kind\)/.test(code.renderer));
   check('徽标在 renderCompact 里被渲染（折叠态真的会画）',
-    /function renderCompact[\s\S]{0,400}renderNudgeBadge\(state\.nudges\)/.test(code.renderer));
+    /function renderCompact[\s\S]{0,400}renderNudgeBadge\(mainNudges\(\)\)/.test(code.renderer));
 }
 
 console.log('\n=== U6: 展开列表 —— 行结构 / 增量复用 / 点击 ===');
@@ -308,8 +308,8 @@ console.log('\n=== U10: 快照侧协作（提醒真的会到渲染层）===');
   check('render 每拍写 data-nudge（不是只在折叠态）',
     /setAttr\(island, 'data-nudge'/.test(fnBody(code.renderer, 'render')));
   check('HUD 里真的会渲染提醒区块',
-    /function renderHud[\s\S]{0,2000}renderNudges\(state\.nudges\)/.test(code.renderer),
-    String(/function renderHud[\s\S]{0,2000}renderNudges\(state\.nudges\)/.test(code.renderer)));
+    /function renderHud[\s\S]{0,2000}renderNudges\(mainNudges\(\)\)/.test(code.renderer),
+    String(/function renderHud[\s\S]{0,2000}renderNudges\(mainNudges\(\)\)/.test(code.renderer)));
 }
 
 console.log('\n=== U11: 截图脚本（README 的视觉证据不能与线上形状分叉）===');

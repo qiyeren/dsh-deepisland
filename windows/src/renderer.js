@@ -109,6 +109,11 @@
     nudgeRows: new Map(),
     /** One jump/ack sequence at a time per reminder id. */
     nudgeInFlight: new Set(),
+    // Local presentation only. Never acknowledge or remove server reminders.
+    urgentHandled: new Map(),
+    urgentWaitingEpochs: new Map(),
+    urgentNextEpoch: 0,
+    urgentInFlight: false,
   };
 
   /* ───────────────────────────── 差异写 DOM 的小工具 ─────────────────────────────
@@ -297,16 +302,28 @@
 
     const entries = Array.isArray(snap.entries) ? snap.entries : [];
     state.entries = entries;
+    const waitingIds = new Set(entries.filter((e) => e && e.id && e.status === 'waiting').map((e) => e.id));
+    for (const id of state.urgentWaitingEpochs.keys()) if (!waitingIds.has(id)) state.urgentWaitingEpochs.delete(id);
+    for (const id of waitingIds) if (!state.urgentWaitingEpochs.has(id)) state.urgentWaitingEpochs.set(id, ++state.urgentNextEpoch);
     state.primary = entries.length ? entries[0] : null;
     // 快照里的 nudges 恒是数组（snapshot.js 保证空列表仍是 []），但**渲染层
     // 照样兜一层**：契约要求「字段缺失 ↔ 空数组」不抖动，而兜底是这条
     // 纪律在渲染侧的落点（旧主进程不发这个字段时界面就是「没有提醒」）。
     state.nudges = Array.isArray(snap.nudges) ? snap.nudges : [];
+    // Prune local presentation state when the underlying events disappear.
+    const currentUrgent = new Map(urgentItems(true).map((item) => [item.id, item]));
+    for (const [id, handled] of state.urgentHandled) {
+      const current = currentUrgent.get(id);
+      if (!current) { state.urgentHandled.delete(id); continue; }
+      if (!current.waiting || current.waitingEpoch !== handled.waitingEpoch) handled.waitingEpoch = 0;
+      for (const nudgeId of handled.ids) if (!current.ids.includes(nudgeId)) handled.ids.delete(nudgeId);
+      if (!handled.waitingEpoch && !handled.ids.size) state.urgentHandled.delete(id);
+    }
 
     // 主会话状态色。提醒只**覆盖**它，不另起一份：岛上的光、点、胶囊底、
     // 焦点环全部派生自 --glow，多一份「提醒色」变量必然在某一处对不上。
     const status = state.primary ? state.primary.status : 'idle';
-    const nudgeTone = nudgeKindOf(state.nudges);
+    const nudgeTone = nudgeKindOf(mainNudges());
     let glow = (state.primary && state.primary.glow) || GLOW_IDLE;
     if (nudgeTone === 'choice') glow = NUDGE_GLOW.choice;
     else if (nudgeTone === 'failed' && status !== 'waiting') glow = NUDGE_GLOW.failed;
@@ -361,10 +378,10 @@
     setAttr(island, 'data-expanded', expanded ? '1' : '0');
     setAttr(island, 'data-status', status);
     setAttr(island, 'data-live', isLive(status) ? '1' : '0');
-    setAttr(island, 'data-nudge', nudgeKindOf(state.nudges));
+    setAttr(island, 'data-nudge', nudgeKindOf(mainNudges()));
     setAttr(island, 'data-glow', cfg.glowEffect ? '1' : '0');
     setAttr(island, 'data-pinned', state.pinned ? '1' : '0');
-    setAttr(island, 'aria-label', ariaLabel(primary, entries, state.nudges));
+    setAttr(island, 'aria-label', ariaLabel(primary, entries, mainNudges()));
 
     setText($('pinned-hint'), state.pinned ? '已钉住 · 点状态行取消' : '');
     setHidden($('pinned-hint'), !state.pinned);
@@ -444,7 +461,7 @@
   function renderCompact(entries, primary) {
     setCssVar($('c-dot'), '--dot', (primary && primary.glow) || GLOW_IDLE);
     setText($('c-title'), primary ? (primary.label || primary.shortId || '会话') : '没有活跃会话');
-    renderNudgeBadge(state.nudges);
+    renderNudgeBadge(mainNudges());
 
     // 胶囊位：多会话 → 在跑/总数（Mac rectangle.stack.fill）；
     // 单会话 → 子代理数（Mac person.2.fill）或工具标签。
@@ -545,7 +562,7 @@
     }
 
     renderRows(multi ? entries : []);
-    renderNudges(state.nudges);
+    renderNudges(mainNudges());
     renderStats(primary);
     renderFooter();
   }
@@ -626,21 +643,40 @@
     });
   }
 
+  // Keep non-navigable urgent reminders visible rather than silently hiding them.
+  function mainNudges() {
+    return state.nudges.filter((n) => !n || !n.sessionId || (n.kind !== 'needs_choice' && n.kind !== 'failed'));
+  }
+
   // Count distinct sessions; live waiting state wins over a failed event.
   // A click navigates only: this independent view never acknowledges a reminder.
-  function urgentItems() {
+  function urgentItems(includeHandled = false) {
     const bySession = new Map();
     for (const e of state.entries) {
-      if (e && e.id && e.status === 'waiting') bySession.set(e.id, { id: e.id, label: e.label || e.shortId || '会话', kind: 'choice' });
+      if (e && e.id && e.status === 'waiting') bySession.set(e.id, { id: e.id, label: e.label || e.shortId || '会话', kind: 'choice', waiting: true, waitingEpoch: state.urgentWaitingEpochs.get(e.id), ids: [], choices: [] });
     }
     for (const n of state.nudges) {
       if (!n || !n.sessionId || (n.kind !== 'needs_choice' && n.kind !== 'failed')) continue;
-      const old = bySession.get(n.sessionId);
-      if (!old || (old.kind === 'failed' && n.kind === 'needs_choice')) {
-        bySession.set(n.sessionId, { id: n.sessionId, label: n.label || '会话', kind: n.kind === 'needs_choice' ? 'choice' : 'failed' });
+      let item = bySession.get(n.sessionId);
+      if (!item) {
+        item = { id: n.sessionId, label: n.label || '会话', kind: 'failed', waiting: false, ids: [], choices: [] };
+        bySession.set(n.sessionId, item);
+      }
+      if (n.kind === 'needs_choice') item.kind = 'choice';
+      if (n.id) {
+        item.ids.push(n.id);
+        if (n.kind === 'needs_choice') item.choices.push(n.id);
       }
     }
-    return [...bySession.values()].sort((a, b) => (a.kind === 'choice' ? 0 : 1) - (b.kind === 'choice' ? 0 : 1));
+    return [...bySession.values()].filter((item) => {
+      const handled = state.urgentHandled.get(item.id);
+      if (includeHandled || !handled) return true;
+      const waiting = item.waiting && item.waitingEpoch !== handled.waitingEpoch;
+      const choice = item.choices.some((id) => !handled.ids.has(id));
+      const visible = waiting || item.ids.some((id) => !handled.ids.has(id));
+      if (visible) item.kind = waiting || choice ? 'choice' : 'failed';
+      return visible;
+    }).sort((a, b) => (a.kind === 'choice' ? 0 : 1) - (b.kind === 'choice' ? 0 : 1));
   }
 
   function renderUrgentIsland() {
@@ -1166,10 +1202,22 @@
     });
 
     const urgent = $('urgent-island');
-    if (urgent) urgent.addEventListener('click', (ev) => {
+    if (urgent) urgent.addEventListener('click', async (ev) => {
       ev.stopPropagation();
       const item = urgentItems()[0];
-      if (item) jumpTo(item);
+      if (!item || state.urgentInFlight) return;
+      state.urgentInFlight = true;
+      try {
+        const result = await window.island.jump({ id: item.id, label: item.label });
+        state.jump = { kind: result && result.kind, brief: result && result.brief };
+        clearTimeout(state.jumpTimer);
+        state.jumpTimer = setTimeout(() => { state.jump = null; render(); }, RESULT_HOLD_MS);
+        if (result && result.kind === 'bridged') {
+          state.urgentHandled.set(item.id, { waitingEpoch: item.waitingEpoch || 0, ids: new Set(item.ids) });
+        }
+        render();
+      } catch { /* Preserve the item on failure. */ }
+      finally { state.urgentInFlight = false; }
     });
 
     // 右键：原生菜单（钉住/隐藏/设置/配置目录/退出）
