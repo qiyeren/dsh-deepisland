@@ -129,6 +129,7 @@ nudges: [ { id, kind, severity, sessionId, label, detail, at, atMs, count, resol
 - 岛体根节点新增 `data-nudge="none|choice|failed|done"`
 - `--glow` **仍由 renderer 唯一写入**：`needs_choice` 覆盖为琥珀 `#F5A623`；`failed` 且当前 `status !== 'waiting'` 覆盖为红 `#E74C3C`；其余维持原状态色
 - 展开 HUD：`#nudges` 区块（空则 `is-off`），每行 = 类色条 + `label` + `detail` + `at`；点击后通过 `window.island.jump({ id, label, nudgeId })` 让主进程先捕获当前快照项；只有捕获成功且跳转请求入队（`kind === 'bridged'`）后才逐条调用 `window.island.nudgeAck({ ids: [item.id] })`。确认失败或没有移除时尝试在本地保留并刷新；入队和确认均不证明会话已打开。本地保留仅在进程内有效，可能重复；实时提醒占满显示上限时，保留项可能持续不可见，应用重启后也不会恢复。保留副本至多 128 条，超出时淘汰最早条目；首次保留满 24 小时后，在下次成功拉取时移除副本；若成功拉取到同一随机 lineage 且代数严格更高的合并条目，也只替换旧本地副本，不确认新条目。旧协议缺少 lineage、不同 lineage 或代数无法证明更新时，仍保留副本。离线期间不按时间清除，移除副本不会确认或删除服务端提醒；系统时钟变化会影响保留时长。
+- 子岛右键“暂时隐藏此条”：只隐藏右键时当前会话显示项中的提醒版本和等待状态，不打开会话、不回答问题、不确认或删除服务端提醒；同一会话合并显示的多个提醒版本一并隐藏。其他会话或新产生的版本仍可显示。隐藏状态只在本次进程内有效，应用重启后可能重新出现。
 - 样式：三色常量只定义一次；循环动画受 `data-glow="0"` 与 `prefers-reduced-motion` 双门控（与既有纪律一致）
 
 ## §3 测试要求
