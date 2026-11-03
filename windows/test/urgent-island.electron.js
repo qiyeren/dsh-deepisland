@@ -77,8 +77,27 @@ app.whenReady().then(async () => {
     anim.currentTime = duration / 2; const high = +getComputedStyle(n, '::after').opacity;
     return { animated: true, low, high, shadow: getComputedStyle(n, '::after').boxShadow };
   })()`);
+  const phase = await win.webContents.executeJavaScript(`(() => {
+    const animations = document.querySelector('#urgent-island').getAnimations({ subtree: true });
+    const outer = animations.find(a => a.animationName === 'urgent-breathe');
+    const inner = animations.find(a => a.animationName === 'urgent-inner-breathe');
+    if (!outer || !inner) return null;
+    return { delta: Math.abs(outer.startTime - inner.startTime), outerDuration: outer.effect.getComputedTiming().duration, innerDuration: inner.effect.getComputedTiming().duration };
+  })()`);
+  if (!phase || phase.delta > 17 || phase.outerDuration !== phase.innerDuration) throw new Error('Child interior and exterior must breathe in phase: ' + JSON.stringify(phase));
   const choiceGlow = await childGlow();
   if (!choiceGlow.animated || choiceGlow.high <= choiceGlow.low || !choiceGlow.shadow.includes('245, 166, 35')) throw new Error('Waiting child must breathe amber: ' + JSON.stringify(choiceGlow));
+  const innerGlow = () => win.webContents.executeJavaScript(`(() => {
+    const n = document.querySelector('#urgent-island');
+    const anim = n.getAnimations({ subtree: true }).find(a => a.animationName === 'urgent-inner-breathe');
+    if (!anim) return { animated: false };
+    anim.pause(); const duration = anim.effect.getComputedTiming().duration;
+    anim.currentTime = 0; const low = +getComputedStyle(n, '::before').opacity;
+    anim.currentTime = duration / 2; const high = +getComputedStyle(n, '::before').opacity;
+    return { animated: true, low, high, background: getComputedStyle(n, '::before').backgroundImage };
+  })()`);
+  const choiceInner = await innerGlow();
+  if (!choiceInner.animated || choiceInner.high <= choiceInner.low || !choiceInner.background.includes('245, 166, 35')) throw new Error('Waiting child interior must breathe amber: ' + JSON.stringify(choiceInner));
   const point = await win.webContents.executeJavaScript("(() => { const r = document.querySelector('#urgent-island').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, inside: true }; })()");
   win.webContents.send('island:cursor', point); await wait();
   if (!interactive.includes(true)) throw new Error('Child pointer must enable mouse interaction: ' + JSON.stringify({ point, interactive, child: await view(), island: await win.webContents.executeJavaScript("document.querySelector('#island').outerHTML.slice(0,400)") }));
@@ -88,10 +107,12 @@ app.whenReady().then(async () => {
   if (!v.visible || !v.text.includes('Fail session') || v.text.includes('Choice session')) throw new Error('Successful jump must advance to the next urgent session');
   const failureGlow = await childGlow();
   if (!failureGlow.animated || failureGlow.high <= failureGlow.low || !failureGlow.shadow.includes('231, 76, 60')) throw new Error('Failed child must breathe red: ' + JSON.stringify(failureGlow));
+  const failureInner = await innerGlow();
+  if (!failureInner.animated || failureInner.high <= failureInner.low || !failureInner.background.includes('231, 76, 60')) throw new Error('Failed child interior must breathe red: ' + JSON.stringify(failureInner));
   const sameEvents = [{ id: 'fail', kind: 'failed', sessionId: 'session-fail', label: 'Fail session' }, { id: 'choice', kind: 'needs_choice', sessionId: 'session-choice', label: 'Choice session' }];
   send('glow-off', [{ id: 'session-choice', label: 'Choice session', status: 'waiting', live: true }], sameEvents, false); await wait();
-  const disabledGlow = await win.webContents.executeJavaScript("getComputedStyle(document.querySelector('#urgent-island'), '::after').opacity");
-  if (+disabledGlow !== 0 || !(await view()).visible) throw new Error('Disabling glow must preserve the alert without its halo: ' + disabledGlow);
+  const disabledGlow = await win.webContents.executeJavaScript("(() => { const n = document.querySelector('#urgent-island'); return { outer: +getComputedStyle(n, '::after').opacity, inner: +getComputedStyle(n, '::before').opacity }; })()");
+  if (disabledGlow.outer !== 0 || disabledGlow.inner !== 0 || !(await view()).visible) throw new Error('Disabling glow must preserve the alert without interior or exterior glow: ' + JSON.stringify(disabledGlow));
   send('glow-on', [{ id: 'session-choice', label: 'Choice session', status: 'waiting', live: true }], sameEvents); await wait();
   jumpKind = 'failed';
   await win.webContents.executeJavaScript("document.querySelector('#urgent-island').click()"); await wait();
