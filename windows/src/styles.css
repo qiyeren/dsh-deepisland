@@ -278,6 +278,26 @@ html, body {
   font-size: 12px;
   cursor: pointer;
 }
+/* A translucent interior layer breathes without dimming the text or intercepting clicks. */
+.urgent-island::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(ellipse at center, rgba(245,166,35,.32), rgba(245,166,35,.08));
+  pointer-events: none;
+  z-index: 0;
+  animation: urgent-inner-breathe 2.8s ease-in-out infinite;
+}
+.urgent-island[data-kind="failed"]::before {
+  background: radial-gradient(ellipse at center, rgba(231,76,60,.32), rgba(231,76,60,.08));
+}
+.urgent-island > * { position: relative; z-index: 1; }
+.island[data-glow="0"] .urgent-island::before { animation: none; opacity: 0; }
+@keyframes urgent-inner-breathe {
+  0%, 100% { opacity: .2; }
+  50% { opacity: .55; }
+}
 /* Keep the shadow static and animate only opacity, as for the main island. */
 .urgent-island::after {
   content: "";
