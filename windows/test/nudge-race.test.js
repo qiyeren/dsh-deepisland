@@ -47,6 +47,12 @@ async function run() {
   fetched = [];
   vm.runInContext('probeNudges({nudgeMaxItems:2})', context); await Promise.resolve();
   assert.deepEqual(Array.from(vm.runInContext('nudgeItems', context), (x) => x.id), ['held2', 'old'], 'fallback entries reappear once live slots free up');
-  console.log('通过 2 / 失败 0');
+  vm.runInContext('retainedNudges.clear(); nudgeRev = ""', context);
+  fetched = [{id:'choice',sessionId:'s',kind:'needs_choice',severity:0,ts:10,count:1,detail:'Q',resolved:false}];
+  vm.runInContext('probeNudges({nudgeMaxItems:2})', context); await Promise.resolve();
+  fetched = [{...fetched[0], resolved:true}];
+  vm.runInContext('probeNudges({nudgeMaxItems:2})', context); await Promise.resolve();
+  assert.equal(vm.runInContext('nudgeItems[0].resolved', context), true, 'resolved state must propagate even when ID and text are unchanged');
+  console.log('通过 3 / 失败 0');
 }
 run().catch((e) => { console.error(e); process.exitCode = 1; });

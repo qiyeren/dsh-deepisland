@@ -9,7 +9,8 @@ if (typeof electron === 'string') {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-urgent-test-'));
   const env = { ...process.env, DSH_URGENT_TEST_HOME: tmp };
   delete env.ELECTRON_RUN_AS_NODE; delete env.ELECTRON_NO_ASAR; delete env.NODE_OPTIONS;
-  const r = spawnSync(electron, [__filename], { env, stdio: 'inherit', timeout: 20000 });
+  // Forty 500ms waits already consume 20s before Electron startup overhead.
+  const r = spawnSync(electron, [__filename], { env, stdio: 'inherit', timeout: 45000 });
   fs.rmSync(tmp, { recursive: true, force: true });
   if (r.error || r.status === null) console.error('Electron subprocess failed:', r.error?.message || r.signal || 'unknown');
   process.exit(r.status === null ? 1 : r.status);
@@ -31,6 +32,13 @@ app.whenReady().then(async () => {
   const wait = () => new Promise(r => setTimeout(r, 500));
   const view = () => win.webContents.executeJavaScript(`(() => { const n = document.querySelector('#urgent-island'); if (!n) return null; const r = n.getBoundingClientRect(), p = document.querySelector('#island').getBoundingClientRect(); return { visible: getComputedStyle(n).display !== 'none', text: n.textContent, top: r.top, bottom: r.bottom, parentBottom: p.bottom, height: innerHeight }; })()`);
   send('status-test', [{ id: 'status-a', label: '会话标题一', status: 'thinking', actionText: '深度思考中', tag: 'Thinking' }, { id: 'status-b', label: '会话标题二', status: 'tool', actionText: '执行中', tag: 'Executing Tool' }], []); await wait();
+  send('context-test', [{ id: 'ctx-test', label: '会话标题', status: 'thinking', contextText: '100%', contextLevel: 2, elapsedText: '00:12' }], []); await wait();
+  const compactInfo = await win.webContents.executeJavaScript(`(() => { const g = document.querySelector('#c-gauge'), e = document.querySelector('#c-elapsed'); return { gaugeVisible: getComputedStyle(g).display !== 'none', gaugeText: g.textContent, elapsedVisible: getComputedStyle(e).display !== 'none', elapsedText: e.textContent }; })()`);
+  if (compactInfo.gaugeVisible || !compactInfo.elapsedVisible) throw new Error('Compact context percentage must be hidden while elapsed remains visible: ' + JSON.stringify(compactInfo));
+  send('todo-gauge-test', [{ id: 'todo-test', label: '会话标题', status: 'thinking', contextText: '100%', contextLevel: 2, todoText: '1/3', elapsedText: '00:12' }], []); await wait();
+  const todoGauge = await win.webContents.executeJavaScript(`(() => { const g = document.querySelector('#c-gauge'); return { visible: getComputedStyle(g).display !== 'none', text: g.textContent, icon: g.getAttribute('data-icon') }; })()`);
+  if (!todoGauge.visible || todoGauge.text !== '1/3' || todoGauge.icon !== 'check') throw new Error('Compact todo progress must remain available: ' + JSON.stringify(todoGauge));
+  send('status-test-reset', [{ id: 'status-a', label: '会话标题一', status: 'thinking', actionText: '深度思考中', tag: 'Thinking' }, { id: 'status-b', label: '会话标题二', status: 'tool', actionText: '执行中', tag: 'Executing Tool' }], []); await wait();
   const compactGeometry = await win.webContents.executeJavaScript(`(() => { const island = document.querySelector('#island').getBoundingClientRect(); const title = getComputedStyle(document.querySelector('#c-title')); return { width: island.width, height: island.height, fontSize: parseFloat(title.fontSize) }; })()`);
   if (compactGeometry.width > 321 || compactGeometry.width < 311 || compactGeometry.height > compactGeometry.fontSize * 2 + 0.5) throw new Error('Compact island geometry exceeds requested capsule: ' + JSON.stringify(compactGeometry));
   const shortOffset = await win.webContents.executeJavaScript("(() => { const t = document.querySelector('#c-title-text'); const a = t.getAnimations()[0]; if (a) { a.pause(); a.currentTime = 7200; } return new DOMMatrixReadOnly(getComputedStyle(t).transform).m41; })()");
@@ -110,5 +118,9 @@ app.whenReady().then(async () => {
   send('g', [{ id: 'session-race', label: 'Race session', status: 'waiting', live: true }], []); await wait();
   finishJump({ kind: 'bridged', brief: 'queued' }); pendingJump = null; await wait();
   v = await view(); if (!v.visible || !v.text.includes('Race session') || acks !== 0) throw new Error('An old jump must not hide a new waiting episode');
+  send('settled-no-transition', [], [{ id: 'resolved-choice', kind: 'needs_choice', sessionId: 'resolved-session', label: 'Resolved session', resolved: true }]); await wait();
+  v = await view(); if (v.visible || acks !== 0) throw new Error('A resolved choice must not create an urgent child or acknowledge the reminder');
+  send('unsettled-no-transition', [], [{ id: 'unresolved-choice', kind: 'needs_choice', sessionId: 'resolved-session', label: 'Resolved session', resolved: false }]); await wait();
+  v = await view(); if (!v.visible || acks !== 0) throw new Error('An unresolved choice must remain visible without acknowledging it');
   console.log('urgent child synthetic UI: passed'); app.exit(0);
 }).catch(e => { console.error(e.stack || e.message); app.exit(1); });

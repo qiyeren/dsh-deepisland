@@ -242,7 +242,7 @@ console.log('=== N8: 事件采集（turn/end 的五种 kind）===');
   handle.dispose();
 }
 
-console.log('=== N9: 事件采集（工具失败的双判据 + callId 去重）===');
+console.log('=== N9: 单次工具失败不触发提醒 ===');
 {
   let nowMs = 1_000_000;
   const clock = () => new Date(nowMs);
@@ -253,20 +253,19 @@ console.log('=== N9: 事件采集（工具失败的双判据 + callId 去重）=
   const emit = (data) => ctx.__emit('session/event', session('s1'), { type: 'tool/result', data });
 
   emit({ message: { isError: true, source: { callId: 'c1' }, content: [{ type: 'text', text: 'Error: nope' }] } });
-  eq('isError 判据命中', center.list().length, 1);
-  eq('明细走正文', center.list()[0].detail, '工具调用失败：nope');
+  eq('单次工具失败不创建提醒', center.list().length, 0);
   nowMs += 100;
 
   emit({ message: { isError: true, source: { callId: 'c1' }, content: [{ type: 'text', text: 'Error: nope' }] } });
-  eq('同一 callId 只记一次', center.list().length, 1);
+  eq('重复的单次工具失败不创建提醒', center.list().length, 0);
 
   nowMs += 100;
   emit({ message: { source: { callId: 'c2' } }, error: { code: 'E_BOOM' } });
-  eq('只有 data.error 也算失败（否则普通工具失败全漏）', center.list().length, 2);
+  eq('结构化工具错误也不创建提醒', center.list().length, 0);
 
   nowMs += 100;
   emit({ message: { isError: true, source: { callId: 'c3' } } });
-  eq('没正文时兜底 unknown 但仍记录', center.list().length, 3);
+  eq('缺少正文的工具失败也不创建提醒', center.list().length, 0);
 
   // 关掉工具失败
   const cfgOff = { ...cfg, nudgeAlertOnToolError: false };

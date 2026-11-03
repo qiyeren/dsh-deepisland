@@ -27,7 +27,7 @@ function fixture(initial, getConfig) {
 const config = (changes = {}) => ({ nudgeEnabled: true, nudgeOnCompleted: true,
   nudgeOnFailed: true, nudgeOnChoice: true, nudgeAlertOnToolError: true, ...changes });
 const done = (f) => f.event('turn/end', { reason: { kind: 'completed' } });
-const fail = (f, callId) => f.event('tool/result', { callId, isError: true });
+const fail = (f) => f.event('turn/end', { reason: { kind: 'error', error: { message: 'synthetic failure' } } });
 
 // Updates are read at delivery time, with no polling or bridge.
 {
@@ -48,17 +48,17 @@ const fail = (f, callId) => f.event('tool/result', { callId, isError: true });
   f.dispose();
 }
 {
-  let live = config({ nudgeAlertOnToolError: false });
+  let live = config({ nudgeOnFailed: false });
   const f = fixture(config(), () => live);
-  fail(f, 'one');
-  assert.equal(f.center.list().length, 0, 'tool errors disabled');
+  fail(f);
+  assert.equal(f.center.list().length, 0, 'turn failure reminders disabled');
   live = config();
-  fail(f, 'one');
-  assert.equal(f.center.list().length, 1, 'same call recorded after re-enable');
+  fail(f);
+  assert.equal(f.center.list().length, 1, 'turn failure recorded after re-enable');
   f.center.ackAll();
-  live = config({ nudgeAlertOnToolError: false });
-  fail(f, 'two');
-  assert.equal(f.center.list().length, 0, 'tool errors disabled again');
+  live = config({ nudgeOnFailed: false });
+  fail(f);
+  assert.equal(f.center.list().length, 0, 'turn failure reminders disabled again');
   f.dispose();
 }
 {
@@ -87,11 +87,11 @@ const fail = (f, callId) => f.event('tool/result', { callId, isError: true });
 // No callback and a throwing callback retain the latest center config.
 {
   const f = fixture(config());
-  f.center.config = config({ nudgeAlertOnToolError: false });
-  fail(f, 'absent');
+  f.center.config = config({ nudgeOnFailed: false });
+  fail(f);
   assert.equal(f.center.list().length, 0);
   f.center.config = config();
-  fail(f, 'absent');
+  fail(f);
   assert.equal(f.center.list().length, 1);
   f.dispose();
 }
