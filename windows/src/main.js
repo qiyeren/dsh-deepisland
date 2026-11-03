@@ -1153,13 +1153,6 @@ ipcMain.handle('island:open-config-dir', () => {
 ipcMain.handle('island:context-menu', (_e, payload) => {
   if (!win || win.isDestroyed()) return false;
   const p = (payload && typeof payload === 'object') ? payload : {};
-  if (p.urgent === true) {
-    return new Promise((resolve) => {
-      let action = null;
-      const menu = Menu.buildFromTemplate([{ label: '暂时隐藏此条', click: () => { action = 'hide-urgent'; } }]);
-      menu.popup({ window: win, callback: () => resolve({ action }) });
-    });
-  }
   const pinned = p.pinned === true;
   const menu = Menu.buildFromTemplate([
     {
