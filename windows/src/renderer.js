@@ -502,14 +502,11 @@
     if (icon) setAttr(chip, 'data-icon', icon); else chip.removeAttribute('data-icon');
     setCssVar(chip, '--chip-ink', ink || '');
 
-    // 仪表位（最多一个）：上下文告警优先，其次待办进度
+    // 收起态不展示上下文占用告警；待办进度仍可使用仪表位。
     const gauge = $('c-gauge');
     let gaugeText = '';
     let level = '';
-    if (primary && primary.contextText && primary.contextLevel > 0) {
-      gaugeText = primary.contextText;
-      level = primary.contextLevel === 2 ? 'danger' : 'warn';
-    } else if (primary && primary.todoText) {
+    if (primary && primary.todoText) {
       gaugeText = primary.todoText;
       level = 'todo';
     }
@@ -683,6 +680,9 @@
     }
     for (const n of state.nudges) {
       if (!n || !n.sessionId || (n.kind !== 'needs_choice' && n.kind !== 'failed')) continue;
+      // A settled question remains in the server queue but no longer creates
+      // an urgent island. Do not suppress a separately observed live wait.
+      if (n.kind === 'needs_choice' && n.resolved === true) continue;
       let item = bySession.get(n.sessionId);
       if (!item) {
         item = { id: n.sessionId, label: n.label || '会话', kind: 'failed', waiting: false, ids: [], choices: [] };

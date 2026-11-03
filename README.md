@@ -160,7 +160,7 @@ cd swift
 | `nudgeOnChoice` | boolean | `true` | 等你批准 / 回答时提醒 |
 | `nudgeOnFailed` | boolean | `true` | 回合失败（`error` / `blocked`）时提醒 |
 | `nudgeOnCompleted` | boolean | `true` | 回合完成（含 `max-tokens` 截断）时提醒 |
-| `nudgeAlertOnToolError` | boolean | `true` | 单次工具调用失败是否也算一条失败提醒 |
+| `nudgeAlertOnToolError` | boolean | 已停用 | 旧配置保留兼容；单次工具失败不再单独生成提醒 |
 | `nudgeMuteRanges` | string | `""` | 静音时段，`HH:MM-HH:MM`，逗号分隔多段，支持跨零点（如 `22:00-08:00`）；留空 = 不静音 |
 | `nudgeMaxItems` | number | `4` | 岛上一屏最多显示几条（1–8） |
 | `nudgeMergeWindowMs` | number | `1200` | 同一会话同一类别的重复事件在窗口内合并、累加计数并轮换 UUID |
@@ -239,7 +239,7 @@ cd windows && npm run perf
 ```
 
 > 提醒相关的两套自检可以单独跑：`node test/test-nudge.mjs`（事件语义：`turn/end`
-> 五种 kind 怎么判、工具失败的双判据、审批链必须放行、`userQuestions` 包装必须还原）
+> 五种 kind 怎么判、单次工具失败不提醒、审批链必须放行、`userQuestions` 包装必须还原）
 > 与 `node test/test-nudge-bridge.mjs`（`GET /nudges` / `POST /nudge/ack` 的端到端行为）。
 > 分开的理由是：桥起不来时语义层仍然是对的，混在一起会让「哪一层坏了」看不出来。
 

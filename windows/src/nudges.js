@@ -124,6 +124,7 @@ function normalizeItem(raw) {
     generation: Number.isSafeInteger(raw.generation) && raw.generation > 0 ? raw.generation : 0,
     kind,
     severity,
+    resolved: raw.resolved === true,
     sessionId: typeof raw.sessionId === 'string' ? raw.sessionId.trim() : '',
     title: typeof raw.title === 'string' ? raw.title.trim() : '',
     project: typeof raw.project === 'string' ? raw.project.trim() : '',

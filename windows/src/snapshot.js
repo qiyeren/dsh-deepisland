@@ -88,7 +88,7 @@ const ENTRY_ALWAYS = ['id', 'label', 'shortId', 'status', 'live', 'glow', 'tag',
  * 的 rev → 白推一跳。契约也明确要求空列表仍是 `[]` 而不是缺字段。
  */
 const NUDGE_FIELDS = [
-  'id', 'kind', 'severity', 'sessionId', 'label', 'detail', 'at', 'atMs', 'count',
+  'id', 'kind', 'severity', 'sessionId', 'label', 'detail', 'at', 'atMs', 'count', 'resolved',
 ];
 
 /** 三类提醒（与服务端 `lib/nudge.js` 的 KINDS 同值）。 */
@@ -258,6 +258,7 @@ function mapNudge(raw) {
       return (s === null) ? 0 : Math.min(2, Math.max(0, Math.trunc(s)));
     })(),
     sessionId,
+    resolved: raw.resolved === true,
     // label = title || shortId（渲染层不再做 fallback，见契约 §2.1）
     label: (title || label || shortIdOf(sessionId)) || '',
     detail: (() => {

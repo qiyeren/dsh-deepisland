@@ -735,7 +735,7 @@ function probeNudges(cfg) {
       && items.every((it, i) => {
         const old = nudgeItems[i];
         return old && old.id === it.id && old.count === it.count
-          && old.ts === it.ts && old.detail === it.detail;
+          && old.ts === it.ts && old.detail === it.detail && old.resolved === it.resolved;
       });
     nudgeRev = nextRev;
     if (same) return;              // 内容一致：保住旧引用，不让快照 rev 抖

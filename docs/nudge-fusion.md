@@ -33,7 +33,7 @@ nudge 的真正价值是**事件语义**（三类、严重度、合并、静音�
 | --- | --- | --- |
 | 完成 | `ctx.on('session/event')` → `turn/end` | `reason.kind` ∈ `completed` / `max-tokens`；`max-tokens` 明细写「输出被长度上限截断」 |
 | 失败 | 同上 | `reason.kind` ∈ `error` / `blocked`（`blocked` 是「本回合没有执行」，不算完成）；`aborted` 不提醒 |
-| 失败 | 同上 → `tool/result` | `message.isError === true` 或 `error !== undefined`；同一 `callId` 只记一次 |
+| 单次工具失败 | 同上 → `tool/result` | 不单独生成失败提醒；任务可能继续或恢复，最终回合失败仍按 `turn/end` 提醒 |
 | 待选择 | `ctx.on('approval/request', (req, next) => …)` | waterfall 观察者，**必须 `return next()`**，否则劫持审批链 |
 | 待选择 | 包装 `ctx.get('userQuestions').ask` | 原样转发，卸载时还原原函数并删掉幂等标记 |
 | 标题 | `session/title` 事件 → 本地缓存 | 另外**每次需要时**再试 `ctx.get('sessionTitle').get(session).title`；**不要读 `session.header.title`**（该字段不存在） |
@@ -51,7 +51,8 @@ nudge 的真正价值是**事件语义**（三类、严重度、合并、静音�
 
 - 合并窗口 `mergeWindowMs`（默认 1200）：窗口内同 `(kind, sessionId)` 的重复事件累加 `count`，并将条目 ID 轮换为新 UUID；旧快照的确认不会删除合并后的新版本。每组同时持有独立的随机 `lineageId` 和递增 `generation`，用于辨别合并代次；它们不是身份认证凭据。
 - 队列上限 `maxItems` 之外的旧条目丢弃（按 `ts` 先进先出）
-- 同一条目 TTL 30 分钟；`ack` 立即移除
+- 同一条目 TTL 30 分钟；`ack` 立即移除。
+- 待选择提醒在已跟踪的所有合并请求明确结算后标为 `resolved: true`，只影响紧急子岛展示，不执行 `ack` 或删除提醒。问题答复须有成功答案，或在迟答场景观察到匹配 callId 的已接纳回复；审批的允许、拒绝和取消算结算，未知结果、超时和异常保守保留。跟踪仅在当前插件进程内，未观察到请求或匹配失败时不能保证自动消失。
 
 ### 1.3 HTTP（挂在既有跳转桥上，`127.0.0.1`，`lib/index.js`）
 
@@ -79,6 +80,7 @@ POST /nudge/ack
   "at": "19:55",
   "atMs": 1793000000000,
   "count": 1,
+  "resolved": false,
   "ts": 1793000000000
 }
 ```
@@ -99,7 +101,7 @@ POST /nudge/ack
 | `nudgeOnCompleted` | boolean | `true` | 完成类是否记录 |
 | `nudgeOnFailed` | boolean | `true` | 失败类是否记录 |
 | `nudgeOnChoice` | boolean | `true` | 待选择类是否记录 |
-| `nudgeAlertOnToolError` | boolean | `true` | 单次工具失败是否也算失败 |
+| `nudgeAlertOnToolError` | boolean | 已停用 | 旧配置保留兼容，不再产生单次工具失败提醒 |
 | `nudgeMuteRanges` | string | `''` | `HH:MM-HH:MM,HH:MM-HH:MM`，支持跨零点；空串表示不静音 |
 | `nudgeMergeWindowMs` | number | `1200` | 合并窗口，200..10000 |
 | `nudgeMaxItems` | number | `4` | 岛上一屏最多列几条，1..8 |
@@ -115,7 +117,7 @@ POST /nudge/ack
 - `windows/src/snapshot.js`：`buildSnapshot` 入参增加 `nudges`，作为**顶层字段**进 payload（同时进 `rev` 计算）；白名单 DTO：
 
 ```js
-nudges: [ { id, kind, severity, sessionId, label, detail, at, atMs, count } ]
+nudges: [ { id, kind, severity, sessionId, label, detail, at, atMs, count, resolved } ]
 ```
 
 `label` = `title || shortId`（渲染层不再做 fallback）；`detail` 已在主进程截断到 ≤120 字。`atMs` 为正数毫秒时间戳，缺失或无效时为 0，始终保留该字段以稳定快照结构。展开面板中，同一会话仅展示一条普通提醒：优先展示时间戳最大的条目；均缺少时间戳或时间相同时保留输入顺序中的第一条。这只影响显示，不确认、不删除服务端提醒；无会话 ID 的条目不参与去重。
