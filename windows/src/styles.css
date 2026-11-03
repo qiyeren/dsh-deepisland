@@ -47,7 +47,7 @@
   --dot: var(--glow);
 
   /* 折叠宽。展开态由 [data-expanded="1"] 覆盖（契约 §3） */
-  --island-w: 253px;
+  --island-w: 316px;
   --island-w-expanded: 436px;
   /* 岛高：renderer 用 ResizeObserver 写 px。auto 只是首帧/旧渲染层兜底 */
   --island-h: auto;
