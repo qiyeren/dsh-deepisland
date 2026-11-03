@@ -301,6 +301,17 @@
     }
 
     const entries = Array.isArray(snap.entries) ? snap.entries : [];
+    // A confirmed waiting → non-waiting transition retires only the choice
+    // alerts seen during that waiting episode from this renderer's view.
+    // The bridge queue is untouched; newly arrived IDs remain eligible.
+    for (const entry of entries) {
+      if (!entry || !entry.id || !['thinking', 'tool', 'done', 'idle'].includes(entry.status) || !state.urgentWaitingEpochs.has(entry.id)) continue;
+      const oldChoices = state.nudges.filter((n) => n && n.sessionId === entry.id && n.kind === 'needs_choice' && n.id);
+      if (!oldChoices.length) continue;
+      const handled = state.urgentHandled.get(entry.id) || { waitingEpoch: 0, ids: new Set() };
+      for (const choice of oldChoices) handled.ids.add(choice.id);
+      state.urgentHandled.set(entry.id, handled);
+    }
     state.entries = entries;
     const waitingIds = new Set(entries.filter((e) => e && e.id && e.status === 'waiting').map((e) => e.id));
     for (const id of state.urgentWaitingEpochs.keys()) if (!waitingIds.has(id)) state.urgentWaitingEpochs.delete(id);
