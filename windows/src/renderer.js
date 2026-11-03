@@ -1248,22 +1248,17 @@
       finally { state.urgentInFlight = false; }
     });
 
-    // Only hide the captured presentation; never navigate or acknowledge.
-    if (urgent) urgent.addEventListener('contextmenu', async (ev) => {
+    // Right click hides only the current presentation; never navigate or acknowledge.
+    if (urgent) urgent.addEventListener('contextmenu', (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
       const item = urgentItems()[0];
       if (!item) return;
-      const captured = { id: item.id, waitingEpoch: item.waitingEpoch || 0, ids: [...item.ids] };
-      try {
-        const result = await window.island.contextMenu({ urgent: true });
-        if (!result || result.action !== 'hide-urgent') return;
-        const previous = state.urgentHandled.get(captured.id);
-        const ids = new Set(previous ? previous.ids : []);
-        for (const id of captured.ids) ids.add(id);
-        state.urgentHandled.set(captured.id, { waitingEpoch: Math.max(previous?.waitingEpoch || 0, captured.waitingEpoch), ids });
-        render();
-      } catch { /* A failed or cancelled menu changes nothing. */ }
+      const previous = state.urgentHandled.get(item.id);
+      const ids = new Set(previous ? previous.ids : []);
+      for (const id of item.ids) ids.add(id);
+      state.urgentHandled.set(item.id, { waitingEpoch: Math.max(previous?.waitingEpoch || 0, item.waitingEpoch || 0), ids });
+      render();
     });
 
     // 右键：原生菜单（钉住/隐藏/设置/配置目录/退出）

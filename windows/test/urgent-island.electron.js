@@ -32,6 +32,11 @@ app.whenReady().then(async () => {
   await win.loadFile(path.join(src, 'index.html'));
   const send = (rev, entries, nudges, glowEffect = true) => win.webContents.send('island:snapshot', { v: 2, rev, entries, nudges, config: { scale: 1, glowEffect, expandOnHover: false }, bridge: { ok: true, port: 0, pending: 0 } });
   const wait = () => new Promise(r => setTimeout(r, 500));
+  for (const status of ['tool', 'done']) {
+    send('no-main-sweep-' + status, [{ id: 'sweep-session', label: 'Activity remains', status, live: true, glow: '#00D2AA' }], []); await wait();
+    const band = await win.webContents.executeJavaScript("(() => { const b = document.querySelector('.band'); return { before: getComputedStyle(b, '::before').animationName, after: getComputedStyle(b, '::after').animationName, label: document.querySelector('#c-title-text').textContent }; })()");
+    if (band.before !== 'none' || band.after !== 'none' || !band.label.includes('Activity remains')) throw new Error('Main island must show activity without sliding light: ' + JSON.stringify({ status, band }));
+  }
   const view = () => win.webContents.executeJavaScript(`(() => { const n = document.querySelector('#urgent-island'); if (!n) return null; const r = n.getBoundingClientRect(), p = document.querySelector('#island').getBoundingClientRect(); return { visible: getComputedStyle(n).display !== 'none', text: n.textContent, top: r.top, bottom: r.bottom, parentBottom: p.bottom, height: innerHeight }; })()`);
   send('status-test', [{ id: 'status-a', label: '会话标题一', status: 'thinking', actionText: '深度思考中', tag: 'Thinking' }, { id: 'status-b', label: '会话标题二', status: 'tool', actionText: '执行中', tag: 'Executing Tool' }], []); await wait();
   send('context-test', [{ id: 'ctx-test', label: '会话标题', status: 'thinking', contextText: '100%', contextLevel: 2, elapsedText: '00:12' }], []); await wait();
@@ -172,23 +177,18 @@ app.whenReady().then(async () => {
   send('hide-start', [], [hideOld, nextAlert]); await wait();
   const previousJump = jumped;
   await win.webContents.executeJavaScript("document.querySelector('#urgent-island').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2 }))"); await wait();
-  if (!menuPayload || menuPayload.urgent !== true || typeof finishMenu !== 'function') throw new Error('Right click on child must request its own context menu');
+  v = await view();
+  if (!v.visible || !v.text.includes('Next session') || menuPayload || acks !== 0 || jumped !== previousJump) throw new Error('Right click must immediately hide the current child without menu, jump, or ACK: ' + JSON.stringify(v));
   const hideNew = { id: 'hide-new', kind: 'needs_choice', sessionId: 'hide-session', label: 'Hide session' };
   send('hide-race', [], [hideOld, hideNew, nextAlert]); await wait();
-  finishMenu({ action: 'hide-urgent' }); await wait();
-  v = await view(); if (!v.visible || !v.text.includes('Hide session') || acks !== 0 || jumped !== previousJump) throw new Error('Hiding an old item must leave newly arrived reminders visible and never jump or ACK: ' + JSON.stringify(v));
+  v = await view(); if (!v.visible || !v.text.includes('Hide session') || acks !== 0 || jumped !== previousJump) throw new Error('A newly arrived reminder must be shown without jump or ACK: ' + JSON.stringify(v));
   await win.webContents.executeJavaScript("document.querySelector('#urgent-island').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2 }))"); await wait();
-  finishMenu({ action: null }); await wait();
-  v = await view(); if (!v.visible || !v.text.includes('Hide session')) throw new Error('Cancelling the menu must not hide the item');
-  await win.webContents.executeJavaScript("document.querySelector('#urgent-island').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2 }))"); await wait();
-  finishMenu({ action: 'hide-urgent' }); await wait();
-  v = await view(); if (!v.visible || !v.text.includes('Next session') || acks !== 0 || jumped !== previousJump) throw new Error('Hiding the current item must show the next without jump or ACK: ' + JSON.stringify(v));
+  v = await view(); if (!v.visible || !v.text.includes('Next session') || menuPayload || acks !== 0 || jumped !== previousJump) throw new Error('Right click must show the next item without menu, jump or ACK: ' + JSON.stringify(v));
   send('hide-refresh', [], [hideOld, hideNew, nextAlert]); await wait();
   v = await view(); if (!v.text.includes('Next session')) throw new Error('A repeated snapshot must not restore a hidden item');
   send('hide-wait-first', [{ id: 'hide-wait', label: 'Waiting test', status: 'waiting', live: true }], []); await wait();
   await win.webContents.executeJavaScript("document.querySelector('#urgent-island').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2 }))"); await wait();
-  finishMenu({ action: 'hide-urgent' }); await wait();
-  v = await view(); if (v.visible || acks !== 0) throw new Error('Hiding a live waiting episode must be display-only');
+  v = await view(); if (v.visible || menuPayload || acks !== 0) throw new Error('Right clicking a live waiting episode must hide it immediately without a menu or ACK');
   send('hide-wait-end', [{ id: 'hide-wait', label: 'Waiting test', status: 'thinking', live: true }], []); await wait();
   send('hide-wait-again', [{ id: 'hide-wait', label: 'Waiting test', status: 'waiting', live: true }], []); await wait();
   v = await view(); if (!v.visible || !v.text.includes('Waiting test')) throw new Error('A later waiting episode must remain visible');

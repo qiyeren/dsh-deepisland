@@ -15,18 +15,6 @@ function harness() {
   vm.runInNewContext(source.slice(start, end + 4), ctx);
   return { open: value => handler({}, value), items: () => items, popup: () => popup };
 }
-test('urgent menu selection returns only local hide action', async () => {
-  const h = harness(); const result = h.open({ urgent: true });
-  assert.equal(h.items().length, 1);
-  assert.equal(h.items()[0].label, '暂时隐藏此条');
-  h.items()[0].click(); h.popup().callback();
-  assert.equal((await result).action, 'hide-urgent');
-});
-test('closing urgent menu without selection is a no-op', async () => {
-  const h = harness(); const result = h.open({ urgent: true });
-  h.popup().callback();
-  assert.equal((await result).action, null);
-});
 test('ordinary menu remains available', () => {
   const h = harness();
   assert.equal(h.open({ pinned: false }), true);
