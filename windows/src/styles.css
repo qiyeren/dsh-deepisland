@@ -265,7 +265,7 @@ html, body {
   left: 50%;
   transform: translateX(-50%);
   width: min(330px, 95%);
-  height: 38px;
+  height: 28.5px;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -277,6 +277,25 @@ html, body {
   font: inherit;
   font-size: 12px;
   cursor: pointer;
+}
+/* Keep the shadow static and animate only opacity, as for the main island. */
+.urgent-island::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: 0 0 12px 2px var(--nudge-choice);
+  pointer-events: none;
+  z-index: -1;
+  animation: urgent-breathe 2.8s ease-in-out infinite;
+}
+.urgent-island[data-kind="failed"]::after {
+  box-shadow: 0 0 12px 2px var(--nudge-failed);
+}
+.island[data-glow="0"] .urgent-island::after { animation: none; opacity: 0; }
+@keyframes urgent-breathe {
+  0%, 100% { opacity: .2; }
+  50% { opacity: .55; }
 }
 .urgent-kind { color: #ffb547; flex: 0 0 auto; }
 .urgent-island[data-kind="failed"] .urgent-kind { color: #ff776e; }

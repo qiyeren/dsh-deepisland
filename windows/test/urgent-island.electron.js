@@ -28,7 +28,7 @@ app.whenReady().then(async () => {
   const src = path.join(__dirname, '..', 'src');
   const win = new BrowserWindow({ width: 484, height: 500, show: false, frame: false, transparent: true, webPreferences: { preload: path.join(src, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false, backgroundThrottling: false, offscreen: true } });
   await win.loadFile(path.join(src, 'index.html'));
-  const send = (rev, entries, nudges) => win.webContents.send('island:snapshot', { v: 2, rev, entries, nudges, config: { scale: 1, glowEffect: true, expandOnHover: false }, bridge: { ok: true, port: 0, pending: 0 } });
+  const send = (rev, entries, nudges, glowEffect = true) => win.webContents.send('island:snapshot', { v: 2, rev, entries, nudges, config: { scale: 1, glowEffect, expandOnHover: false }, bridge: { ok: true, port: 0, pending: 0 } });
   const wait = () => new Promise(r => setTimeout(r, 500));
   const view = () => win.webContents.executeJavaScript(`(() => { const n = document.querySelector('#urgent-island'); if (!n) return null; const r = n.getBoundingClientRect(), p = document.querySelector('#island').getBoundingClientRect(); return { visible: getComputedStyle(n).display !== 'none', text: n.textContent, top: r.top, bottom: r.bottom, parentBottom: p.bottom, height: innerHeight }; })()`);
   send('status-test', [{ id: 'status-a', label: '会话标题一', status: 'thinking', actionText: '深度思考中', tag: 'Thinking' }, { id: 'status-b', label: '会话标题二', status: 'tool', actionText: '执行中', tag: 'Executing Tool' }], []); await wait();
@@ -64,6 +64,21 @@ app.whenReady().then(async () => {
   const mainLabels = await win.webContents.executeJavaScript("Array.from(document.querySelectorAll('#nudges .nudge-label')).map(n => n.textContent)");
   if (!mainLabels.includes('Done session') || mainLabels.includes('Fail session') || mainLabels.includes('Choice session')) throw new Error('Main island must show completed reminders but not urgent child reminders: ' + JSON.stringify(mainLabels));
   v = await view(); if (!v.visible || !v.text.includes('Choice session') || !v.text.includes('1') || v.top < v.parentBottom || v.bottom > v.height) throw new Error('Urgent child priority/count/geometry invalid: ' + JSON.stringify(v));
+  const childHeight = v.bottom - v.top;
+  if (Math.abs(childHeight - 28.5) > 0.5) throw new Error('Urgent child must be 25% shorter than 38px: ' + childHeight);
+  const childGlow = () => win.webContents.executeJavaScript(`(() => {
+    const n = document.querySelector('#urgent-island');
+    const animations = n.getAnimations({ subtree: true });
+    const anim = animations.find(a => a.animationName === 'urgent-breathe');
+    if (!anim) return { animated: false, animations: animations.map(a => a.animationName), style: getComputedStyle(n, '::after').animationName };
+    anim.pause();
+    const duration = anim.effect.getComputedTiming().duration;
+    anim.currentTime = 0; const low = +getComputedStyle(n, '::after').opacity;
+    anim.currentTime = duration / 2; const high = +getComputedStyle(n, '::after').opacity;
+    return { animated: true, low, high, shadow: getComputedStyle(n, '::after').boxShadow };
+  })()`);
+  const choiceGlow = await childGlow();
+  if (!choiceGlow.animated || choiceGlow.high <= choiceGlow.low || !choiceGlow.shadow.includes('245, 166, 35')) throw new Error('Waiting child must breathe amber: ' + JSON.stringify(choiceGlow));
   const point = await win.webContents.executeJavaScript("(() => { const r = document.querySelector('#urgent-island').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, inside: true }; })()");
   win.webContents.send('island:cursor', point); await wait();
   if (!interactive.includes(true)) throw new Error('Child pointer must enable mouse interaction: ' + JSON.stringify({ point, interactive, child: await view(), island: await win.webContents.executeJavaScript("document.querySelector('#island').outerHTML.slice(0,400)") }));
@@ -71,6 +86,13 @@ app.whenReady().then(async () => {
   if (!jumped || jumped.id !== 'session-choice' || acks !== 0) throw new Error('Child click must jump without acknowledging alerts');
   v = await view();
   if (!v.visible || !v.text.includes('Fail session') || v.text.includes('Choice session')) throw new Error('Successful jump must advance to the next urgent session');
+  const failureGlow = await childGlow();
+  if (!failureGlow.animated || failureGlow.high <= failureGlow.low || !failureGlow.shadow.includes('231, 76, 60')) throw new Error('Failed child must breathe red: ' + JSON.stringify(failureGlow));
+  const sameEvents = [{ id: 'fail', kind: 'failed', sessionId: 'session-fail', label: 'Fail session' }, { id: 'choice', kind: 'needs_choice', sessionId: 'session-choice', label: 'Choice session' }];
+  send('glow-off', [{ id: 'session-choice', label: 'Choice session', status: 'waiting', live: true }], sameEvents, false); await wait();
+  const disabledGlow = await win.webContents.executeJavaScript("getComputedStyle(document.querySelector('#urgent-island'), '::after').opacity");
+  if (+disabledGlow !== 0 || !(await view()).visible) throw new Error('Disabling glow must preserve the alert without its halo: ' + disabledGlow);
+  send('glow-on', [{ id: 'session-choice', label: 'Choice session', status: 'waiting', live: true }], sameEvents); await wait();
   jumpKind = 'failed';
   await win.webContents.executeJavaScript("document.querySelector('#urgent-island').click()"); await wait();
   v = await view(); if (!v.visible || !v.text.includes('Fail session') || acks !== 0) throw new Error('Failed jump must retain the current urgent item without ack');
