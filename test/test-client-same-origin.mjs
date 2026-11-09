@@ -31,6 +31,16 @@ function setup(handler, initial = {}) {
   return { api: exported, calls, timers, data, cleanups, get updates() { return updates; }, tick: () => { for (const [id, timer] of [...timers]) { if (!timers.has(id)) continue; if (timer.once) timers.delete(id); timer.fn(); } } };
 }
 
+test('configuration binds the registered plugin entry ID', () => {
+  const env = setup(() => { throw new Error('unexpected network'); });
+  let requested;
+  const scope = { value: {} };
+  assert.ok(env.api.bindConfigScope({ configForms: { get(id) { requested = id; return scope; } } }));
+  assert.equal(requested, 'vibe-island');
+  env.api.bindConfigScope({ settingsScope: { bind(options) { requested = options.namespace; return scope; } } });
+  assert.equal(requested, 'vibe-island');
+});
+
 test('settings card uses theme colors for text, surface and controls', () => {
   const env = setup(() => Promise.resolve(response({ config: { bridgeEnabled: false } })));
   let card;
