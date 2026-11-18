@@ -660,14 +660,9 @@ function stopCursorWatch() {
 /**
  * 提醒队列的一拍拉取（挂在既有 2s 探桥闸门里，**没有自己的定时器**）。
  *
- * ## 两道闸，各自省掉不同的事
- *
- * 1. **服务端 rev 相同** → 整段跳过。省的是「每 2 秒重建一份 items 数组」
- *    以及随之而来的重渲染：`rev` 由 id+count+ts 算，内容没变时它不变，
- *    而截断（nudgeMaxItems）是个纯函数 —— 重算一遍结果必然相同。
- * 2. **快照 rev 相同** → main 的 tick 里本来就不会 send。这条是白拿的，
- *    但前提是「引用真的没换」：所以第 1 条命中时**必须原样保留** nudgeItems，
- *    而不是重新赋一个内容相同的新数组（否则快照 rev 每次都变，2 秒推一跳）。
+ * 每次成功拉取都重新选择有限条目：即使服务端 rev 未变，本地上限和
+ * retained 回退也可能变化。内容完全相同时保留 nudgeItems 的旧引用，
+ * 让快照去重继续工作，避免每 2 秒产生无意义的重渲染。
  *
  * ## 为什么失败只记一次
  *
@@ -694,7 +689,6 @@ function probeNudges(cfg) {
     nudgeWarnKey = '';
     // Only a successful fetch can retire local fallbacks: offline is not proof
     // that an alert disappeared. Recompute even when the server rev is stable.
-    let retired = false;
     const now = Date.now();
     for (const [id, item] of retainedNudges) {
       // A confirmed newer generation represents this same merged event. Drop
@@ -707,36 +701,30 @@ function probeNudges(cfg) {
           && Number.isSafeInteger(next.generation) && next.generation > item.generation);
       if (superseded || now - item._retainedAt >= 24 * 60 * 60 * 1000) {
         retainedNudges.delete(id);
-        retired = true;
+      } else if (item.sourceKind === 'unknown' && typeof item.lineageId === 'string' && item.lineageId !== ''
+          && Number.isSafeInteger(item.generation) && item.generation > 0
+          && r.items.some((next) => next.id === id && next.sourceKind === 'internal'
+            && next.lineageId === item.lineageId && next.generation === item.generation)) {
+        // Only verified evidence for the same lineage and generation applies to
+        // the retained unknown copy. Never reclassify a known ordinary reminder.
+        retainedNudges.set(id, { ...item, sourceKind: 'internal' });
       }
     }
-    if (!retired && nudgeRev && r.rev === nudgeRev) return;
+    // Even when the server revision is stable, the display cap or local
+    // fallback set can change. Re-select the bounded list on every good fetch.
 
     // 条数上限来自配置（插件设置面板的「一屏几条」）。config.load() 已经把
     // 它收进顶层字段并做了 1..8 的取值校验，这里不再 clamp 第二遍 ——
     // 两处各 clamp 一次，将来口径一变必然分叉（一处改一处不改）。
     const max = cfg.nudgeMaxItems;
-    // 按严重度升序（越小越该先处理），同档按时间倒序（新的在前）。
-    // 服务端已排过序，这里再排一次是因为**截断发生在 app 侧**：maxItems 只
-    // 留前 N 条，拿错顺序留下的就是最不重要的那几条。
-    const order = (a, b) => (a.severity - b.severity) || (b.ts - a.ts);
-    const fetched = r.items.slice().sort(order);
-    // Live bridge items always take priority. Local fallbacks can be hidden by
-    // the display cap and retire after 24h or when the 128-ID cache fills.
-    const fallback = [];
-    for (const [id, retained] of retainedNudges) {
-      // Session/kind alone cannot identify a successor across bridge owners.
-      if (!fetched.some((item) => item.id === id)) fallback.push(retained);
-    }
-    const items = fetched.concat(fallback.sort(order)).slice(0, max);
+    // Hide known internal sources before the display cap, including retained
+    // fallback items. Selection is read-only; it never acknowledges a reminder.
+    const items = nudges.selectDisplayItems(r.items, [...retainedNudges.values()], max);
 
     const nextRev = r.rev;
-    const same = (items.length === nudgeItems.length)
-      && items.every((it, i) => {
-        const old = nudgeItems[i];
-        return old && old.id === it.id && old.count === it.count
-          && old.ts === it.ts && old.detail === it.detail && old.resolved === it.resolved;
-      });
+    // Normalized reminders contain scalar fields only. Compare the complete
+    // bounded list so title/project/provenance changes cannot leave stale UI.
+    const same = JSON.stringify(items) === JSON.stringify(nudgeItems);
     nudgeRev = nextRev;
     if (same) return;              // 内容一致：保住旧引用，不让快照 rev 抖
 

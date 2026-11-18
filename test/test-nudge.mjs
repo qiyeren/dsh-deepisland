@@ -230,11 +230,16 @@ console.log('=== N8: 事件采集（turn/end 的五种 kind）===');
   emit('turn/end', { reason: { kind: 'aborted' } });
   eq('aborted（用户自己按了停止）不提醒', center.list().length, 0);
 
-  // 子代理过滤
+  // Only explicit subagent origin/depth identifies a child; parentSession alone
+  // also occurs on ordinary historical forks and must not hide their reminders.
   center.ackAll(); nowMs += 5000;
-  const sub = { header: { id: 'child', cwd: '/p', parentSession: 'parent' } };
+  const sub = { header: { id: 'child', cwd: '/p', parentSession: 'parent', origin: 'subagent' } };
   ctx.__emit('session/event', sub, { type: 'turn/end', data: { reason: { kind: 'completed' } } });
-  eq('有 parentSession 的子代理不提醒', center.list().length, 0);
+  eq('明确标识的子代理不提醒', center.list().length, 0);
+  const fork = { header: { id: 'fork', cwd: '/p', parentSession: 'parent', isSeeded: true } };
+  ctx.__emit('session/event', fork, { type: 'turn/end', data: { reason: { kind: 'completed' } } });
+  eq('普通历史分叉仍提醒', center.list().length, 1);
+  center.ackAll();
   const deep = { header: { id: 'child2', cwd: '/p', delegationDepth: 2 } };
   ctx.__emit('session/event', deep, { type: 'turn/end', data: { reason: { kind: 'completed' } } });
   eq('delegationDepth > 0 也不提醒', center.list().length, 0);

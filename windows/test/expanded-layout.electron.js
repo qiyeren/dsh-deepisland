@@ -40,5 +40,20 @@ app.whenReady().then(async () => {
     console.log(JSON.stringify({ scale, ...geometry }));
     if (geometry.mode !== '1' || geometry.island.bottom > geometry.viewport + 0.5 || geometry.footer.height !== 0 || geometry.stats.height !== 0 || parseFloat(geometry.bottomLeft) <= 0 || parseFloat(geometry.bottomRight) <= 0 || geometry.sessionRows !== 6 || geometry.nudgeRows !== 8 || !geometry.urgentVisible || geometry.urgent.top < geometry.island.bottom || geometry.urgent.bottom > geometry.viewport + 0.5) throw new Error('Expanded island, footer, rounded corners, rows, or urgent child invalid');
   }
+  // The single-session HUD must use the same left-title/right-action row as the multi-session HUD.
+  win.setSize(Number(size[1]), Number(size[2]));
+  win.webContents.send('island:snapshot', { v: 2, rev: 'synthetic-single', entries: [{ id: 'single', label: '合成会话标题', status: 'idle', actionText: '待命', detailText: '等待指令输入' }], nudges: [], config: { scale: 1, glowEffect: true, expandOnHover: true, notchEnabled: true, jumpEnabled: true }, bridge: { ok: true, port: 0, pending: 0 }, jump: null, serverNow: Date.now() });
+  await new Promise(resolve => setTimeout(resolve, 150));
+  await win.webContents.executeJavaScript("document.querySelector('#compact').click()");
+  await new Promise(resolve => setTimeout(resolve, 400));
+  const single = await win.webContents.executeJavaScript(`(() => {
+    const row = document.querySelector('#list .row');
+    const label = row?.querySelector('.label');
+    const action = row?.querySelector('.tag');
+    const rect = element => { const r = element?.getBoundingClientRect(); return r && { left: r.left, right: r.right, top: r.top, bottom: r.bottom, height: r.height }; };
+    return { expanded: document.querySelector('#island').dataset.expanded, count: document.querySelectorAll('#list .row').length, detailDisplay: getComputedStyle(document.querySelector('#detail')).display, label: label?.textContent, action: action?.textContent, labelBox: rect(label), actionBox: rect(action), rowBox: rect(row), islandBox: rect(document.querySelector('#island')) };
+  })()`);
+  console.log(JSON.stringify({ single }));
+  if (single.expanded !== '1' || single.count !== 1 || single.detailDisplay !== 'none' || single.label !== '合成会话标题' || single.action !== '待命' || !single.rowBox || single.rowBox.height <= 0 || single.labelBox.right > single.actionBox.left + 1 || single.actionBox.right > single.islandBox.right + 1 || single.rowBox.bottom > single.islandBox.bottom + 1) throw new Error('Single-session title/action layout invalid');
   app.exit(0);
 }).catch(error => { console.error(error.message); app.exit(1); });

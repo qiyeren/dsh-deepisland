@@ -69,6 +69,79 @@ test('configuration uses same-origin independently of bridge and reports failure
   assert.deepEqual(env.calls.map(c => [c.url, c.options.method || 'GET']), [[CONFIG, 'GET'], [CONFIG, 'POST']]);
 });
 
+test('header button sends an explicit enable through the configuration route', async () => {
+  const env = setup((_url, options) => Promise.resolve(options.method === 'POST'
+    ? response({ ok: true, launch: { requested: true, status: 'present' } })
+    : response({ ok: true, config: { notchEnabled: false, bridgeEnabled: false } })));
+  let header;
+  env.api.apply({ slots: { inject: (_name, fn) => fn(), register: (spec, component) => {
+    if (spec.id === 'dsh-vibe-island-header-btn') header = component;
+  } }, on() {} });
+  await flush();
+  assert.equal(typeof header, 'function');
+  header().props.onClick();
+  await flush();
+  const post = env.calls.find(call => call.url === CONFIG && call.options.method === 'POST');
+  assert.ok(post, 'button posts a configuration change');
+  assert.deepEqual(JSON.parse(post.options.body), { notchEnabled: true });
+  for (const cleanup of env.cleanups) cleanup();
+});
+
+test('successful save reports when the native launch request failed', async () => {
+  const env = setup((_url, options) => Promise.resolve(options.method === 'POST'
+    ? response(JSON.parse(options.body).action === 'launch'
+      ? { ok: true, launch: { requested: false, status: 'pair-mismatch' } } : { ok: true })
+    : response({ ok: true, config: { notchEnabled: false, bridgeEnabled: false } })));
+  let header;
+  env.api.apply({ slots: { inject: (_name, fn) => fn(), register: (spec, component) => {
+    if (spec.id === 'dsh-vibe-island-header-btn') header = component;
+  } }, on() {} });
+  await flush();
+  const result = await env.api.saveConfig({ notchEnabled: true }, { notchEnabled: false });
+  await flush();
+  assert.equal(result.ok, true, 'configuration itself was saved');
+  assert.match(header().props.title, /启动失败.*配套/);
+  for (const cleanup of env.cleanups) cleanup();
+});
+
+test('an unrelated queued setting does not cancel an explicit enable request', async () => {
+  const enableResponse = deferred();
+  const env = setup((_url, options) => {
+    const patch = JSON.parse(options.body);
+    if (patch.notchEnabled === true) return enableResponse.promise;
+    if (patch.action === 'launch') return Promise.resolve(response({ ok: true, launch: { requested: true, status: 'present' } }));
+    return Promise.resolve(response({ ok: true }));
+  });
+  const enable = env.api.saveConfig({ notchEnabled: true }, { notchEnabled: false });
+  const scale = env.api.saveConfig({ scale: 1.2 }, { notchEnabled: true });
+  enableResponse.resolve(response({ ok: true }));
+  assert.equal((await enable).ok, true);
+  assert.equal((await scale).ok, true);
+  await flush();
+  assert.equal(env.calls.filter(call => JSON.parse(call.options.body).action === 'launch').length, 1);
+});
+
+test('a late launch failure cannot override a newer disable status', async () => {
+  const launchResponse = deferred();
+  const env = setup((_url, options) => {
+    if (options.method !== 'POST') return Promise.resolve(response({ ok: true, config: { notchEnabled: false, bridgeEnabled: false } }));
+    if (JSON.parse(options.body).action === 'launch') return launchResponse.promise;
+    return Promise.resolve(response({ ok: true }));
+  });
+  let header;
+  env.api.apply({ slots: { inject: (_name, fn) => fn(), register: (spec, component) => {
+    if (spec.id === 'dsh-vibe-island-header-btn') header = component;
+  } }, on() {} });
+  await flush();
+  assert.equal((await env.api.saveConfig({ notchEnabled: true }, { notchEnabled: false })).ok, true);
+  await flush();
+  assert.equal((await env.api.saveConfig({ notchEnabled: false }, { notchEnabled: true })).ok, true);
+  launchResponse.resolve(response({ ok: true, launch: { requested: false, status: 'pair-mismatch' } }));
+  await flush();
+  assert.equal(header().props.title, '开启刘海灵动岛');
+  for (const cleanup of env.cleanups) cleanup();
+});
+
 test('slow config load merges later field edits without losing server fields', async () => {
   const load = deferred();
   const env = setup((url, options) => options.method === 'POST' ? Promise.resolve(response({ ok: true })) : load.promise,

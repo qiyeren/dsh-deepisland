@@ -25,6 +25,7 @@ const context = {
     fetchNudges: async () => offline ? ({ ok: false, reason: 'offline' }) : ({ ok: true, rev: revision, items: fetched }),
     ack: async () => ({ ok: true, removed: 0 }),
     acknowledgeItems: moduleMock.exports.acknowledgeItems,
+    selectDisplayItems: moduleMock.exports.selectDisplayItems,
   },
 };
 vm.createContext(context);

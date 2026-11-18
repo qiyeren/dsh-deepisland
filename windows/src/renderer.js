@@ -474,11 +474,8 @@
     setText($('c-title-text'), primary ? (primary.label || primary.shortId || '会话') : '没有活跃会话');
     renderNudgeBadge(mainNudges());
 
-    // 胶囊位：多会话 → 在跑/总数（Mac rectangle.stack.fill）；
-    // 单会话 → 子代理数（Mac person.2.fill）或工具标签。
-    // ⚠️ 单会话的工具/状态标签**不带图标**：Mac compactRow 里它就是一颗纯文本
-    // 胶囊（工具名用等宽字体），硬塞一个扳手图标会让「Thinking」读起来像在
-    // 执行工具 —— 图标只在它能表达确定语义（多会话、子代理）时才出现。
+    // 胶囊位：多会话显示在跑/总数，单会话显示工具或状态标签。
+    // 子代理计数不展示；单会话的工具/状态标签也不带图标。
     const chip = $('c-chip');
     let icon = '';
     let text = '';
@@ -490,10 +487,6 @@
       text = live > 0 ? live + '/' + entries.length : String(entries.length);
       icon = 'stack';
       if (entries.some((e) => e.status === 'waiting')) ink = '#FFAA00';
-    } else if (primary.subagentText) {
-      icon = 'users';
-      text = primary.subagentText;
-      ink = 'rgb(166,199,255)';
     } else if (primary.tag) {
       text = primary.tag;
     }
@@ -554,11 +547,9 @@
       setAttr(pressure, 'aria-valuenow', pct);
     }
 
-    // 详情正文块：单会话才有（多会话的正文属于某一个会话，铺全局会误导）
-    const detail = $('detail');
-    const detailOn = !!primary && !multi;
-    setHidden(detail, !detailOn);
-    if (detailOn) setText($('detail-text'), primary.detailText || primary.label || '');
+    // 展开态始终显示会话列表；单会话也不再用独立详情块代替列表。
+    setHidden($('detail'), true);
+    setText($('detail-text'), '');
 
     // 待办行
     const todo = $('todo');
@@ -569,7 +560,7 @@
       setText($('todo-prog'), primary.todoText);
     }
 
-    renderRows(multi ? entries : []);
+    renderRows(entries);
     renderNudges(mainNudges());
     renderStats(primary);
     renderFooter();
@@ -818,7 +809,7 @@
 
   /* ───────────── 统计行：固定槽位，只切显隐与值 ─────────────
    *
-   * 槽位顺序照 Mac statsRow：耗时 / 工具 / 输出 / 上下文 / 在飞（子代理）。
+   * 槽位显示耗时 / 轮次 / 工具 / 输出 / 上下文，不展示子代理计数。
    * 「待办」不在这里 —— 单会话有独立的待办行（当前项 + 2/5），多会话的
    * 待办属于某一个会话、铺到全局统计行只会重复；Swift 版同样只放在待办行。
    */
@@ -829,7 +820,6 @@
     ['tools', '工具'],
     ['output', '输出'],
     ['context', '上下文'],
-    ['agents', '子代理'],
   ];
 
   function createStat(key, label) {
@@ -851,7 +841,6 @@
       case 'tools': return entry.toolCountText || '';
       case 'output': return entry.outputText || '';
       case 'context': return entry.contextText || '';
-      case 'agents': return entry.subagentText ? entry.subagentText + ' 个' : '';
       default: return '';
     }
   }

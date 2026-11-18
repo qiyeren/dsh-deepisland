@@ -94,7 +94,7 @@ async function testMainWiring() {
   let fetched = [];
   const context = {
     ipcMain: { handle(name, fn) { handler = fn; } },
-    nudges: { acknowledgeItems, ack: async () => ({ ok: true, removed: 0 }),
+    nudges: { acknowledgeItems, selectDisplayItems: nudgesModule.exports.selectDisplayItems, ack: async () => ({ ok: true, removed: 0 }),
       fetchNudges: async () => { fetches++; return { ok: true, rev: 'same-rev', items: fetched }; } },
     config: { load: () => ({ nudgeMaxItems: 8 }) }, console, poke() {},
   };

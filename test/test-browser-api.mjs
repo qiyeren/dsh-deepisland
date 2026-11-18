@@ -78,6 +78,20 @@ test('POST passes exact raw JSON and preserves write result and failure', async 
   assert.deepEqual(await call(failed.routes.get(CONFIG), request(CONFIG, 'POST', '{}', { 'content-type': 'application/json' })), { status: 400, body: rejection });
 });
 
+test('launch requires the exact explicit action and does not write config', async () => {
+  const r = registry(); let writes = 0; let launches = 0;
+  await registerBrowserApi(r.connection, callbacks({
+    writeConfig: () => { writes++; return { ok: false }; },
+    onLaunch: () => { launches++; return { requested: true, status: 'present' }; },
+  }));
+  const route = r.routes.get(CONFIG);
+  const send = body => call(route, request(CONFIG, 'POST', JSON.stringify(body), { 'content-type': 'application/json' }));
+  assert.deepEqual(await send({ action: 'launch' }), { status: 200, body: { ok: true, launch: { requested: true, status: 'present' } } });
+  assert.equal(writes, 0); assert.equal(launches, 1);
+  assert.equal((await send({ action: 'launch', extra: true })).status, 400);
+  assert.equal(launches, 1); assert.equal(writes, 1);
+});
+
 test('POST rejects wrong media type, invalid JSON and byte limits before write', async () => {
   const r = registry();
   let writes = 0;

@@ -16,7 +16,7 @@ async function run() {
   const pendingJump = deferred();
   const handlers = {}; let fetched = []; let acknowledgements = 0; let revision = 0;
   const context = { ipcMain: { handle(name, fn) { handlers[name] = fn; } },
-    nudges: { acknowledgeItems: mod.exports.acknowledgeItems,
+    nudges: { acknowledgeItems: mod.exports.acknowledgeItems, selectDisplayItems: mod.exports.selectDisplayItems,
       ack: async () => { acknowledgements++; return { ok: true, removed: 0 }; },
       fetchNudges: async () => ({ ok: true, rev: String(++revision), items: fetched }) },
     config: { load: () => ({ nudgeMaxItems: 2, jumpEnabled: true }) },

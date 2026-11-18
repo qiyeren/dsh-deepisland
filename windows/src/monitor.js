@@ -197,11 +197,15 @@ class SessionMonitor {
         if (activity.status === STATUS.IDLE) {
           // 如果游标明确看到事件流里的回合已结束（sawTurnEnd），且投影没有未完成步骤，保持待命，避免误唤醒
           if (st.cursor.sawTurnEnd && (!proj || !proj.hasOpenStep)) {
-            if (st.cursor.toolCount > 0) activity.toolCount = st.cursor.toolCount;
+            if (st.cursor.toolCount > 0) {
+              activity.toolCount = st.cursor.toolCount;
+              activity.visibleToolCount = st.cursor.visibleToolCount;
+            }
           } else {
             activity = inferFromProjection(st.prev, proj, now, f.mtimeMs);
             if (st.cursor.toolCount > 0 && activity.toolCount === 0) {
               activity.toolCount = st.cursor.toolCount;
+              activity.visibleToolCount = st.cursor.visibleToolCount;
             }
           }
         } else {
@@ -276,7 +280,9 @@ function decorate(entry, now) {
   // epoch 起点：renderer 用它自己按秒走字（比每拍算好的字符串准半拍，
   // 也让「同一秒内重渲染」不再产生新快照）。
   e.elapsedFrom = a.turnStartTime || null;
-  e.toolCountText = a.toolCount + ' 次';
+  const visibleToolCount = Number.isSafeInteger(a.visibleToolCount) && a.visibleToolCount >= 0
+    ? a.visibleToolCount : a.toolCount;
+  e.toolCountText = visibleToolCount + ' 次';
   e.contextText = p ? formatPercent(projections.contextFraction(p)) : null;
   // 压力条的原始比例：文本（"42%"）不够画进度条，renderer 需要 0..1。
   e.contextFraction = p ? projections.contextFraction(p) : null;
@@ -289,7 +295,8 @@ function decorate(entry, now) {
   e.turnStepText = turnStepText(a);
   e.outputText = (p && typeof p.outputTokens === 'number')
     ? projections.shortTokens(p.outputTokens) + ' tok' : null;
-  e.subagentText = a.pendingAgents > 0 ? String(a.pendingAgents) : null;
+  // 不向任何浮岛形态暴露子智能体数量，snapshot 会省略空值。
+  e.subagentText = null;
   e.label = entry.label;
   e.shortId = shortId(entry.id);
   // 展开态的三块 UI 数据（口径对照 Swift NotchContentView）：

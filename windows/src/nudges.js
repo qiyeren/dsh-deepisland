@@ -125,6 +125,9 @@ function normalizeItem(raw) {
     kind,
     severity,
     resolved: raw.resolved === true,
+    // Absent/unknown provenance remains visible rather than silently hiding a
+    // possibly urgent ordinary reminder from an older bridge.
+    sourceKind: raw.sourceKind === 'internal' ? 'internal' : raw.sourceKind === 'normal' ? 'normal' : 'unknown',
     sessionId: typeof raw.sessionId === 'string' ? raw.sessionId.trim() : '',
     title: typeof raw.title === 'string' ? raw.title.trim() : '',
     project: typeof raw.project === 'string' ? raw.project.trim() : '',
@@ -146,6 +149,22 @@ function normalizeItems(list) {
     if (item) out.push(item);
   }
   return out;
+}
+
+/** Select display-only items before applying the cap, without acknowledging or
+ * mutating either the bridge queue or retained fallback entries. Live entries
+ * retain priority over offline fallbacks, as before. */
+function selectDisplayItems(fetched, retained, max) {
+  const live = Array.isArray(fetched) ? fetched : [];
+  const fallback = Array.isArray(retained) ? retained : [];
+  // While any live item has the same ID, never expose the retained copy:
+  // acknowledgment routes only by ID and could otherwise affect another owner.
+  const ids = new Set(live.filter(Boolean).map((item) => item.id));
+  const visible = (item) => item && item.sourceKind !== 'internal';
+  const order = (a, b) => (a.severity - b.severity) || (b.ts - a.ts);
+  return live.filter(visible).sort(order)
+    .concat(fallback.filter((item) => visible(item) && !ids.has(item.id)).sort(order))
+    .slice(0, max);
 }
 
 /**
@@ -326,6 +345,7 @@ module.exports = {
   DETAIL_LIMIT,
   normalizeItem,
   normalizeItems,
+  selectDisplayItems,
   fetchNudges,
   ack,
 };

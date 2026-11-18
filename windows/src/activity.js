@@ -49,6 +49,7 @@ function newActivity() {
     detail: STATUS_META.idle.detail,
     currentTool: null,
     toolCount: 0,
+    visibleToolCount: 0,
     isWaitingApproval: false,
     turnStartTime: null,
     turn: null,
@@ -155,6 +156,31 @@ function extractMessageText(d) {
   return null;
 }
 
+// 仅按实际工具标识判断；普通工具的参数/模型文本中出现这些词不代表来源。
+const HIDDEN_DISPLAY_TOOLS = new Set([
+  'subagent', 'subagent_fork', 'send_message', 'list_agents', 'wait_agent',
+  'workflow', 'ralph',
+]);
+
+function hideToolDetails(name) {
+  return typeof name === 'string' && (
+    HIDDEN_DISPLAY_TOOLS.has(name) || name.startsWith('mnemon_') || name.startsWith('mcp__mnemon__')
+  );
+}
+
+function hasHiddenMessageToolCall(data) {
+  const content = data?.message?.content;
+  return Array.isArray(content) && content.some(part => part?.type === 'tool-call' && hideToolDetails(part.name));
+}
+
+function toolResultCallId(data) {
+  const message = data && data.message;
+  for (const id of [message?.toolCallId, message?.source?.callId, data?.callId]) {
+    if (typeof id === 'string' && id) return id;
+  }
+  return null;
+}
+
 // ────────────────────────────── 游标 ──────────────────────────────
 
 /**
@@ -167,6 +193,7 @@ class ActivityCursor {
   constructor() {
     this.lastSeq = 0;
     this.toolCount = 0;
+    this.visibleToolCount = 0;
     this.turnStart = null;
     this.current = newActivity();
     this.sawTurnEnd = false;
@@ -174,6 +201,9 @@ class ActivityCursor {
     this.doneAt = null;
     this.lastEventTime = null;
     this.callNames = new Map();
+    this.pendingCalls = new Map();
+    this.unknownResults = [];
+    this.displayCall = null;
   }
 
   /** 被派发子代理的工具名（命中即在「在飞调用」里计入子代理数）。 */
@@ -184,6 +214,7 @@ class ActivityCursor {
   reset() {
     this.lastSeq = 0;
     this.toolCount = 0;
+    this.visibleToolCount = 0;
     this.turnStart = null;
     this.current = newActivity();
     this.sawTurnEnd = false;
@@ -191,6 +222,66 @@ class ActivityCursor {
     this.doneAt = null;
     this.lastEventTime = null;
     this.callNames.clear();
+    this.clearPendingCalls();
+  }
+
+  clearPendingCalls() {
+    this.pendingCalls.clear();
+    this.unknownResults = [];
+    this.displayCall = null;
+  }
+
+  hasPendingHiddenCall() {
+    for (const call of this.pendingCalls.values()) if (call.hidden) return true;
+    return false;
+  }
+
+  // 优先显示普通审批，避免并行敏感调用掩盖主会话的真实确认请求。
+  pendingApproval() {
+    const waiting = [...this.pendingCalls.entries()].filter(([, call]) => call.waiting);
+    return waiting.reverse().find(([, call]) => !call.hidden) || waiting[0] || null;
+  }
+
+  showCall(id, call) {
+    const cur = this.current;
+    this.displayCall = id;
+    cur.status = call.waiting ? STATUS.WAITING : STATUS.TOOL;
+    cur.isWaitingApproval = call.waiting;
+    cur.currentTool = call.hidden ? null : call.name;
+    cur.title = call.hidden ? (call.waiting ? STATUS_META.waiting.title : STATUS_META.tool.title) : '执行 ' + call.name;
+    cur.detail = call.hidden ? (call.waiting ? STATUS_META.waiting.title : '正在执行操作') : call.arg.slice(0, 100);
+  }
+
+  /** 关联真实 result ID。无 ID 的旧事件只在候选可确定时释放，回合结束兜底。 */
+  settleCall(data) {
+    const completed = new Set();
+    const id = toolResultCallId(data);
+    if (id && this.pendingCalls.has(id)) completed.add(id);
+    else if (!id && this.pendingCalls.size) this.unknownResults.push(new Set(this.pendingCalls.keys()));
+
+    const removeCompleted = () => {
+      for (const token of completed) {
+        this.pendingCalls.delete(token);
+        for (const candidates of this.unknownResults) candidates.delete(token);
+      }
+      this.unknownResults = this.unknownResults.filter(candidates => candidates.size > 0);
+    };
+    removeCompleted();
+    while (this.unknownResults.length) {
+      const single = this.unknownResults.findIndex(candidates => candidates.size === 1);
+      if (single >= 0) {
+        const [token] = this.unknownResults.splice(single, 1)[0];
+        completed.add(token);
+        removeCompleted();
+        continue;
+      }
+      const allCandidates = new Set(this.unknownResults.flatMap(candidates => [...candidates]));
+      if (this.unknownResults.length < allCandidates.size) break;
+      for (const token of allCandidates) completed.add(token);
+      this.unknownResults = [];
+      removeCompleted();
+    }
+    return completed;
   }
 
   /**
@@ -218,9 +309,9 @@ class ActivityCursor {
     }
     if (!this.everSawEvent) return newActivity();
 
-    // toolCount 是游标的私有累计量，必须显式写进快照
-    // （早期漏了这步 → HUD 里「工具调用」永远显示 0 次）
+    // 内部计数保留完整工具调用；只把普通调用计入可见计数。
     this.current.toolCount = this.toolCount;
+    this.current.visibleToolCount = this.visibleToolCount;
 
     // 回合结束后的静默期：到点自动转回待命（岛收起）
     if (this.current.status === STATUS.DONE && this.doneAt !== null
@@ -273,8 +364,13 @@ class ActivityCursor {
       if (this.callNames.size > 512) this.callNames.clear();
     }
 
+    // 问题回复属于当前回合，不能清除仍在飞的工具及其隐私保护。
+    if (t === 'user/message' && d.source?.kind === 'user-question-reply') return;
+
     if (t === 'turn/start' || t === 'user/message') {
       this.toolCount = 0;
+      this.visibleToolCount = 0;
+      this.clearPendingCalls();
       this.sawTurnEnd = false;
       this.doneAt = null;
       // 时间戳在事件顶层（ev.time），不在 ev.data 里
@@ -298,11 +394,20 @@ class ActivityCursor {
     }
 
     if (t === 'assistant/message' || (typeof t === 'string' && t.startsWith('model/'))) {
+      const msgText = extractMessageText(d);
+      // 只要任一已知敏感调用仍在飞，不让模型事件覆盖详情或审批状态。
+      // model/done 是模型事件而非工具结果，不能据此释放在飞调用。
+      if (this.hasPendingHiddenCall() || this.pendingApproval()) return;
       if (cur.status !== STATUS.TOOL) {
         cur.status = STATUS.THINKING;
         if (cur.title !== '正在分析与规划...') cur.title = STATUS_META.thinking.title;
       }
-      const msgText = extractMessageText(d);
+      // assistant/message 可能先于 tool/call，并在同一 content 中包含正文/推理。
+      // 只识别结构化调用名，避免按正文关键词误伤普通文本。
+      if (t === 'assistant/message' && hasHiddenMessageToolCall(d)) {
+        if (cur.status !== STATUS.TOOL) cur.detail = STATUS_META.thinking.detail;
+        return;
+      }
       if (msgText) {
         cur.detail = msgText.slice(-60);
       }
@@ -311,33 +416,46 @@ class ActivityCursor {
 
     if (t === 'tool/call') {
       const name = d.name || '工具';
-      this.toolCount += 1;
-      cur.status = STATUS.TOOL;
-      cur.currentTool = name;
       const arg = displayText(d.arguments) || name;
-      cur.title = '执行 ' + name;
-      cur.detail = arg.slice(0, 100);
-      // 带 question 的调用表示在等人工确认
-      if (arg.startsWith('提问:')) {
-        cur.status = STATUS.WAITING;
-        cur.isWaitingApproval = true;
-      }
+      const hidden = hideToolDetails(name);
+      this.toolCount += 1;
+      if (!hidden) this.visibleToolCount += 1;
+      const id = typeof d.callId === 'string' && d.callId ? d.callId : Symbol('legacy-call');
+      // 判等待仍使用原参数；只隐藏显示内容，并保存所有在飞调用供关联结果。
+      const call = { name, arg, hidden, waiting: arg.startsWith('提问:') };
+      this.pendingCalls.set(id, call);
+      const approval = this.pendingApproval();
+      if (approval) this.showCall(...approval);
+      else this.showCall(id, call);
       return;
     }
 
     if (t === 'tool/result') {
-      cur.isWaitingApproval = false;
-      if (cur.status === STATUS.TOOL || cur.status === STATUS.WAITING) {
-        cur.status = STATUS.THINKING;
-        cur.title = '分析工具执行结果...';
+      const hadPending = this.pendingCalls.size > 0;
+      const completed = this.settleCall(d);
+      const approval = this.pendingApproval();
+      if (approval) {
+        this.showCall(...approval);
+      } else if (completed.has(this.displayCall) && this.pendingCalls.size) {
+        // 当前显示的调用结束，但仍有其他调用在飞，切回最近的调用。
+        this.showCall(...[...this.pendingCalls.entries()].at(-1));
+      } else if (completed.has(this.displayCall) || !hadPending) {
+        this.displayCall = null;
+        cur.isWaitingApproval = false;
+        if (cur.status === STATUS.TOOL || cur.status === STATUS.WAITING) {
+          if (cur.currentTool === null) cur.detail = '正在分析执行结果';
+          cur.status = STATUS.THINKING;
+          cur.title = '分析工具执行结果...';
+        }
       }
       return;
     }
 
     if (t === 'turn/end' || t === 'model/done') {
+      this.clearPendingCalls();
       cur.status = STATUS.DONE;
       cur.title = STATUS_META.done.title;
-      cur.detail = '调用 ' + this.toolCount + ' 次工具';
+      cur.detail = '调用 ' + this.visibleToolCount + ' 次工具';
       cur.currentTool = null;
       cur.isWaitingApproval = false;
       this.sawTurnEnd = true;

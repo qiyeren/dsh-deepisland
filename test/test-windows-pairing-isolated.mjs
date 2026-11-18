@@ -35,7 +35,8 @@ test('Windows starts only a paired archive and never downloads an unpaired one',
     fs.writeFileSync(path.join(app, 'DSHNotch.exe'), 'fixture');
     const asar = path.join(app, 'resources', 'app.asar');
     let launches = 0;
-    const spawnImpl = () => { launches++; return { on() {}, unref() {} }; };
+    const launchedPaths = [];
+    const spawnImpl = exe => { launches++; launchedPaths.push(exe); return { on() {}, unref() {} }; };
     const opts = { platform: 'win32', installDir: app, spawnImpl, nodeArch: 'x64' };
     fs.writeFileSync(asar, 'old');
     for (const existingOnly of [true, false]) {
@@ -53,9 +54,53 @@ test('Windows starts only a paired archive and never downloads an unpaired one',
     assert.equal(r.status, 'pair-missing');
     assert.equal(fs.existsSync(missing), false);
     assert.equal(launches, 1);
+
+    // If the standard copy is mismatched/locked, an independently installed
+    // matching copy can start without overwriting or downloading anything.
+    const standard = path.join(process.env.LOCALAPPDATA, 'Programs', 'DSHNotch');
+    const parallel = path.join(process.env.LOCALAPPDATA, 'Programs', 'DSHNotch-paired');
+    for (const [folder, content] of [[standard, 'old'], [parallel, 'paired']]) {
+      fs.mkdirSync(path.join(folder, 'resources'), { recursive: true });
+      fs.writeFileSync(path.join(folder, 'DSHNotch.exe'), 'fixture');
+      fs.writeFileSync(path.join(folder, 'resources', 'app.asar'), content);
+    }
+    const alternate = await mod.ensureAppInstalled({ ...opts, installDir: missing, existingOnly: true });
+    assert.equal(alternate.status, 'present');
+    assert.equal(alternate.launched, true);
+    assert.equal(launchedPaths.at(-1), path.join(parallel, 'DSHNotch.exe'));
+    fs.writeFileSync(path.join(parallel, 'resources', 'app.asar'), 'not-paired');
+    assert.equal((await mod.ensureAppInstalled({ ...opts, installDir: missing, existingOnly: true })).status, 'pair-mismatch');
+    assert.equal(launches, 2, 'a mismatched alternate cannot start');
+    fs.writeFileSync(path.join(standard, 'resources', 'app.asar'), 'paired');
+    fs.writeFileSync(path.join(parallel, 'resources', 'app.asar'), 'paired');
+    await mod.ensureAppInstalled({ ...opts, installDir: missing, existingOnly: true });
+    assert.equal(launchedPaths.at(-1), path.join(standard, 'DSHNotch.exe'), 'standard matching install keeps priority');
+    await mod.ensureAppInstalled({ ...opts, existingOnly: true });
+    assert.equal(launchedPaths.at(-1), path.join(app, 'DSHNotch.exe'), 'explicit matching install keeps highest priority');
+
+    // A hash-versioned runtime remains independently addressable when both
+    // existing archives are in use, and it is still rejected if unpaired.
+    const versioned = path.join(process.env.LOCALAPPDATA, 'Programs', `DSHNotch-${digest.slice(0, 16)}`);
+    fs.mkdirSync(path.join(versioned, 'resources'), { recursive: true });
+    fs.writeFileSync(path.join(versioned, 'DSHNotch.exe'), 'fixture');
+    fs.writeFileSync(path.join(versioned, 'resources', 'app.asar'), 'not-paired');
+    for (const folder of [standard, parallel]) fs.writeFileSync(path.join(folder, 'resources', 'app.asar'), 'old');
+    const beforeVersioned = launches;
+    assert.equal((await mod.ensureAppInstalled({ ...opts, installDir: missing, existingOnly: true })).status, 'pair-mismatch');
+    assert.equal(launches, beforeVersioned, 'a mismatched versioned archive cannot start');
+    fs.writeFileSync(path.join(versioned, 'resources', 'app.asar'), 'paired');
+    const isolated = await mod.ensureAppInstalled({ ...opts, installDir: missing, existingOnly: true });
+    assert.equal(isolated.status, 'present');
+    assert.equal(isolated.launched, true);
+    assert.equal(launchedPaths.at(-1), path.join(versioned, 'DSHNotch.exe'));
+    assert.equal(launches, beforeVersioned + 1);
   } finally {
     if (saved.local === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = saved.local;
     http.request = saved.req; https.request = saved.https; https.get = saved.get; globalThis.fetch = saved.fetch;
-    fs.rmSync(dir, { recursive: true, force: true });
+    const resolved = path.resolve(dir);
+    if (path.dirname(resolved) !== path.resolve(os.tmpdir()) || !path.basename(resolved).startsWith('island-pair-')) {
+      throw new Error('refusing to remove an unexpected synthetic test directory');
+    }
+    fs.rmSync(resolved, { recursive: true, force: true });
   }
 });

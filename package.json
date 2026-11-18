@@ -16,6 +16,7 @@
   },
   "files": [
     "lib",
+    "windows/artifacts/dsh-notch-paired.asar",
     "scripts",
     "cordis.patch.yml",
     "dsh.plugin.json",

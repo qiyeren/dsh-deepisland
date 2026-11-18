@@ -241,7 +241,7 @@ function shortIdOf(id) {
  * @returns {object|null}
  */
 function mapNudge(raw) {
-  if (!raw || typeof raw !== 'object') return null;
+  if (!raw || typeof raw !== 'object' || raw.sourceKind === 'internal') return null;
   const id = typeof raw.id === 'string' ? raw.id.trim() : '';
   if (!id) return null;
   const kind = typeof raw.kind === 'string' ? raw.kind : '';

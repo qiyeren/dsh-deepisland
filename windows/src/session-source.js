@@ -46,7 +46,7 @@ function dshRoot() {
 
 /**
  * 会话文件及其元信息。
- * @typedef {{ id: string, project: string, file: string, mtimeMs: number, size: number }} SessionFileInfo
+ * @typedef {{ id: string, project: string, file: string, mtimeMs: number, size: number, ctimeMs: number, ino: number, dev: number }} SessionFileInfo
  */
 
 /** 按 mtime 倒序返回候选会话文件。 */
@@ -57,11 +57,15 @@ function sessionFiles(opts = {}) {
   const all = scanAllSessionFiles();
   const cutoff = Date.now() - activeWithin;
 
-  let recent = all.filter((f) => f.mtimeMs >= cutoff).sort((a, b) => b.mtimeMs - a.mtimeMs);
-  // 活跃窗口内一个都没有（刚开机、DSH 还没开始干活）→ 退化为全量最新 1 个，
-  // 面板仍然有东西可显示，而不是空白。
+  const byRecent = (a, b) => b.mtimeMs - a.mtimeMs;
+  const candidates = all.filter((f) => f.mtimeMs >= cutoff).sort(byRecent);
+  // 先过滤再限额：子会话再新也不能挤走普通会话。通常凑够 maxCount 就停，
+  // 避免为不会显示的旧候选解压头部；特殊 slice 参数保留原有语义。
+  const limit = Number.isSafeInteger(maxCount) && maxCount > 0 ? maxCount : Infinity;
+  let recent = visibleFiles(candidates, limit);
+  // 活跃窗口内没有可显示的会话时，仍退化为全量中最新的一个可显示会话。
   if (recent.length === 0) {
-    recent = all.slice().sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, 1);
+    recent = visibleFiles(all.slice().sort(byRecent), 1);
   }
   return recent.slice(0, maxCount);
 }
@@ -86,6 +90,9 @@ function scanAllSessionFiles() {
         const st = fs.statSync(cachedScan[i].file);
         cachedScan[i].mtimeMs = st.mtimeMs;
         cachedScan[i].size = st.size;
+        cachedScan[i].ctimeMs = st.ctimeMs;
+        cachedScan[i].ino = st.ino;
+        cachedScan[i].dev = st.dev;
       } catch {}
     }
     return cachedScan.slice();
@@ -125,6 +132,9 @@ function scanAllSessionFiles() {
         file: full,
         mtimeMs: st.mtimeMs,
         size: st.size,
+        ctimeMs: st.ctimeMs,
+        ino: st.ino,
+        dev: st.dev,
       });
     }
   };
@@ -160,6 +170,126 @@ const eventCache = new Map();
 
 /** zstd 帧标准魔数 0xFD2FB528 (小端序 28 b5 2f fd) */
 const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
+
+// 仅缓存已观察的压缩头帧及分类，不缓存会话正文。追加事件改变 mtime/size 时，
+// 若第一帧字节不变，仍可复用分类，不必每拍重复解压。
+const headerCache = new Map();
+// Persistent entries are bounded; overspill uses the current 800ms scan's
+// object identities and never evicts the whole cache during a long traversal.
+let scanHeaderCache = new WeakMap();
+const MAX_HEADER_FRAME_BYTES = 256 * 1024;
+const MAX_CACHED_HEADER_BYTES = 4 * 1024;
+const MAX_HEADER_CACHE_ENTRIES = 8192;
+
+/** Return the end of the first complete standard zstd frame, null if incomplete, -1 if invalid. */
+function firstFrameEnd(data) {
+  if (data.length < 5) return null;
+  if (!data.subarray(0, 4).equals(ZSTD_MAGIC)) return -1;
+  const descriptor = data[4];
+  if (descriptor & 0x18) return -1;
+  const contentSizeFlag = descriptor >>> 6;
+  const singleSegment = (descriptor & 0x20) !== 0;
+  const dictionaryFlag = descriptor & 0x03;
+  const dictionaryBytes = dictionaryFlag === 3 ? 4 : dictionaryFlag;
+  const contentSizeBytes = contentSizeFlag === 0 ? (singleSegment ? 1 : 0) : 1 << contentSizeFlag;
+  let offset = 5 + (singleSegment ? 0 : 1) + dictionaryBytes + contentSizeBytes;
+  if (offset > data.length) return null;
+  for (;;) {
+    if (data.length - offset < 3) return null;
+    const block = data.readUIntLE(offset, 3);
+    offset += 3;
+    const last = (block & 1) !== 0;
+    const type = (block >>> 1) & 3;
+    if (type === 3) return -1;
+    offset += type === 1 ? 1 : block >>> 3;
+    if (offset > data.length) return null;
+    if (last) break;
+  }
+  if (descriptor & 0x04) offset += 4;
+  return offset <= data.length ? offset : null;
+}
+
+/** Read at most a bounded prefix and return only its first compressed frame. */
+function readHeaderFrame(file) {
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    let data = Buffer.alloc(0);
+    while (data.length < MAX_HEADER_FRAME_BYTES) {
+      const chunk = Buffer.allocUnsafe(Math.min(8192, MAX_HEADER_FRAME_BYTES - data.length));
+      const count = fs.readSync(fd, chunk, 0, chunk.length, null);
+      if (count === 0) return null;
+      data = Buffer.concat([data, chunk.subarray(0, count)]);
+      const end = firstFrameEnd(data);
+      if (end === -1) return null;
+      if (end !== null) return Buffer.from(data.subarray(0, end));
+    }
+  } catch { /* 不完整、损坏或不可读：不把普通会话误判为子会话 */ }
+  finally { if (fd !== undefined) { try { fs.closeSync(fd); } catch {} } }
+  return null;
+}
+
+/** Match the session directory encoding used by DSH persistence's encodeSegment. */
+function sessionIdSegment(id) {
+  if (id === '.') return '~002E';
+  if (id === '..') return '~002E~002E';
+  return id.replace(/[^A-Za-z0-9._-]/g, (ch) => '~' + ch.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0'));
+}
+
+/** Only affirmative, structurally plausible SessionHeader metadata hides a session. */
+function headerIsSubagent(frame, sessionId) {
+  if (!frame || typeof zlib.zstdDecompressSync !== 'function') return false;
+  try {
+    const plain = zlib.zstdDecompressSync(frame, { maxOutputLength: MAX_HEADER_FRAME_BYTES });
+    // 当前 DSH 的独立头帧只含一条以换行结尾的 JSONL；其它形态保守保留。
+    if (!plain.length || plain.indexOf(0x0a) !== plain.length - 1) return false;
+    const h = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(plain.subarray(0, -1)));
+    if (!h || typeof h !== 'object' || Array.isArray(h) || h.type !== 'session'
+        || typeof h.id !== 'string' || !h.id || sessionIdSegment(h.id) !== sessionId
+        || !Number.isSafeInteger(h.version) || h.version < 1
+        || !Number.isSafeInteger(h.createdAt) || h.createdAt < 0 || Object.is(h.createdAt, -0)
+        || (h.cwd !== undefined && (typeof h.cwd !== 'string' || !path.isAbsolute(h.cwd)))
+        || (h.parentSession !== undefined && typeof h.parentSession !== 'string')
+        || (h.agentPreset !== undefined && typeof h.agentPreset !== 'string')
+        || (h.isSeeded !== undefined && typeof h.isSeeded !== 'boolean')
+        || (h.origin !== undefined && h.origin !== 'subagent')
+        || (h.delegationDepth !== undefined
+          && (!Number.isSafeInteger(h.delegationDepth) || h.delegationDepth < 0 || Object.is(h.delegationDepth, -0)))) return false;
+    return h.origin === 'subagent' || h.delegationDepth > 0;
+  } catch { return false; }
+}
+
+function isSubagentFile(info) {
+  const persistent = headerCache.get(info.file);
+  const hit = persistent || scanHeaderCache.get(info);
+  const now = Date.now();
+  if (hit && hit.mtimeMs === info.mtimeMs && hit.size === info.size
+      && hit.ctimeMs === info.ctimeMs && hit.ino === info.ino && hit.dev === info.dev
+      && (hit.hasFrame || now < hit.retryAt)) return hit.isSubagent;
+  const frame = readHeaderFrame(info.file);
+  const isSubagent = frame && hit && hit.frame && frame.equals(hit.frame)
+    ? hit.isSubagent : headerIsSubagent(frame, info.id);
+  // A sharing violation or torn prefix may recover without a stat change.
+  // Retry unknown prefixes at the scan cadence instead of caching them forever.
+  const entry = {
+    mtimeMs: info.mtimeMs, size: info.size, ctimeMs: info.ctimeMs, ino: info.ino, dev: info.dev,
+    hasFrame: !!frame, frame: frame && frame.length <= MAX_CACHED_HEADER_BYTES ? frame : null,
+    isSubagent, retryAt: now + SCAN_CACHE_MS,
+  };
+  if (persistent || headerCache.size < MAX_HEADER_CACHE_ENTRIES) headerCache.set(info.file, entry);
+  else scanHeaderCache.set(info, entry);
+  return isSubagent;
+}
+
+function visibleFiles(files, limit) {
+  const visible = [];
+  for (const file of files) {
+    if (isSubagentFile(file)) continue;
+    visible.push(file);
+    if (visible.length >= limit) break;
+  }
+  return visible;
+}
 
 /**
  * 读并解码某个会话文件的事件流。
@@ -263,6 +393,8 @@ function decompress(file) {
 /** 清空缓存（自检用；正常路径靠 mtime 自动失效）。 */
 function invalidate() {
   eventCache.clear();
+  headerCache.clear();
+  scanHeaderCache = new WeakMap();
   cachedScan = null;
   lastScanTime = 0;
 }
