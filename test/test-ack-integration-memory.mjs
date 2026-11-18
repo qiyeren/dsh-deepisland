@@ -84,7 +84,10 @@ try {
   const reconciled = new Promise(resolve => { reconcileDone = resolve; });
   const main = vm.createContext({
     Date, console,
-    nudges: { fetchNudges: () => win.exports.fetchNudges({ httpImpl: transport }) },
+    nudges: {
+      fetchNudges: () => win.exports.fetchNudges({ httpImpl: transport }),
+      selectDisplayItems: win.exports.selectDisplayItems,
+    },
     poke: () => reconcileDone(),
     stale,
   });

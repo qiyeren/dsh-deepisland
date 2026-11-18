@@ -1,5 +1,7 @@
 # DSH Notch for Windows
 
+> **Fork 预发布提示（2026-11-19）：** 本文下方部分构建、自动下载安装和真机验证描述是历史记录，不代表当前 fork 已完成同等验证。当前插件只启动哈希匹配的配套原生端，不会自动下载上游版本。最新发布包和已验证范围请以 [fork 的 Release 页面](https://github.com/qiyeren/dsh-deepisland/releases)为准。
+
 Windows 版的刘海灵动岛。**状态：已实现，并在 Windows 11 真机上跑通。**
 
 > 接手时的状态是「数据层完成、UI 未做、一行都没在 Windows 上跑过」。

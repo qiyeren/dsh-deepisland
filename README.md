@@ -8,8 +8,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows-blue.svg)](#-平台支持)
-[![Version](https://img.shields.io/badge/Version-1.4.0-blue.svg)](https://github.com/myYangyunfan/dsh-deepisland/releases)
-[![Tests](https://img.shields.io/badge/Tests-336%20%2B%20507%20passing-brightgreen.svg)](#-开发与测试)
+[![Release](https://img.shields.io/badge/Release-1.5.0--rc.1-orange.svg)](https://github.com/qiyeren/dsh-deepisland/releases/tag/v1.5.0-rc.1)
 
 <br>
 
@@ -150,7 +149,7 @@ cd swift
 | `showSubagentCount` | boolean | `true` | 并行子代理运行时是否显示右侧数字角标 |
 | `bridgeEnabled` | boolean | `true` | 本机回环通信服务开关（仅影响跨进程跳转） |
 | `bridgePort` | number | `47311` | 本机桥端口；冲突时停止启动，不自动顺延或复用未知桥；`47312` 保留为所有权哨兵，不可使用 |
-| `autoInstallApp` | boolean | `true` | 缺少原生应用时是否自动从上游 Release 拉取安装；上游原生端不保证包含本 fork 的提醒功能。现有程序也不会因版本号相同而自动证明与宿主配套。 |
+| `autoInstallApp` | boolean | `true` | 控制原生应用自动安装流程。Windows 不会下载上游原生端，只会尝试启动已安装且 asar 哈希匹配的配套版本；仅版本号相同不能证明配套。 |
 
 ### 提醒（融合自 dsh-nudge）
 
