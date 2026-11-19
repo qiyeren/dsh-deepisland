@@ -707,7 +707,7 @@
     setText($('urgent-kind'), first.kind === 'choice' ? '等待处理' : '执行失败');
     setText($('urgent-label'), first.label);
     setText($('urgent-more'), items.length > 1 ? '+' + (items.length - 1) : '');
-    setAttr(node, 'aria-label', '跳转到' + first.label);
+    setAttr($('urgent-jump'), 'aria-label', '跳转到' + first.label);
   }
 
   /** `bridged` means enqueued, not that the client actually navigated. */
@@ -1237,10 +1237,8 @@
       finally { state.urgentInFlight = false; }
     });
 
-    // Right click hides only the current presentation; never navigate or acknowledge.
-    if (urgent) urgent.addEventListener('contextmenu', (ev) => {
-      ev.preventDefault();
-      ev.stopPropagation();
+    // Both dismissal gestures affect presentation only, never the server queue.
+    function dismissUrgent() {
       const item = urgentItems()[0];
       if (!item) return;
       const previous = state.urgentHandled.get(item.id);
@@ -1248,6 +1246,17 @@
       for (const id of item.ids) ids.add(id);
       state.urgentHandled.set(item.id, { waitingEpoch: Math.max(previous?.waitingEpoch || 0, item.waitingEpoch || 0), ids });
       render();
+    }
+    const urgentClose = $('urgent-close');
+    if (urgentClose) urgentClose.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      dismissUrgent();
+    });
+    // Preserve the original right-click gesture, including on the close button.
+    if (urgent) urgent.addEventListener('contextmenu', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      dismissUrgent();
     });
 
     // 右键：原生菜单（钉住/隐藏/设置/配置目录/退出）

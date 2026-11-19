@@ -60,6 +60,10 @@ const nudges = require('./nudges.js');
 const { performJump } = require('./jump.js');
 // 快照协议是纯函数模块（无 electron 依赖），可直接被 node 单测 —— 见 snapshot.js。
 const { buildSnapshot, nextDelay } = require('./snapshot.js');
+const position = require('./position.js');
+// Separate from the shared settings file: configuration saves cannot erase it.
+const positionFile = path.join(config.appDataDir(), 'window-position.json');
+let rememberedPosition = null;
 
 /**
  * 穿透看门狗间隔（契约 §5 第 3 条「穿透永不粘连」）。
@@ -258,13 +262,15 @@ function assetPath(name) {
  * windowOrigin 的同一条纪律：窗口顶端 = 屏幕顶端，不留顶部 bleed）。
  */
 function placeWindow(force = false) {
-  if (!win || win.isDestroyed()) return;
+  if (!win || win.isDestroyed() || dragOrigin) return;
   const scale = win._scale || 1;
   const ww = Math.round(MAX_WINDOW.w * scale);
   const hh = Math.round(MAX_WINDOW.h * scale);
   const area = screen.getPrimaryDisplay().workArea;
-  const x = Math.round(area.x + (area.width - ww) / 2);
-  const y = area.y;
+  const restored = rememberedPosition && position.visiblePosition(rememberedPosition, ww, hh, screen.getAllDisplays());
+  const x = restored ? restored.x : Math.round(area.x + (area.width - ww) / 2);
+  const y = restored ? restored.y : area.y;
+  if (restored) rememberedPosition = restored;
 
   // 容差 2px：DPI 取整会让「设 484 读到 485」，没有容差就会反复重设，
   // 白白触发 DWM 的窗口动画。2px 在这个尺寸上看不出来。
@@ -358,6 +364,7 @@ function createWindow() {
   win.on('hide', () => releasePointer('window-hide'));
   win.on('move', () => { if (dragOrigin) return; releasePointer('window-move'); });
 
+  rememberedPosition = position.loadPosition(positionFile);
   placeWindow();
   // 先不 show —— 等首帧快照到了由 applyVisibility 决定
 }
@@ -1096,7 +1103,22 @@ ipcMain.handle('island:drag-move', (_e, point) => {
   win.setBounds({ x, y, width: dragOrigin.width, height: dragOrigin.height });
   return true;
 });
-ipcMain.handle('island:drag-end', () => { dragOrigin = null; return true; });
+ipcMain.handle('island:drag-end', () => {
+  const origin = dragOrigin;
+  dragOrigin = null;
+  if (origin && win && !win.isDestroyed()) {
+    const bounds = win.getBounds();
+    const moved = bounds.x !== origin.x || bounds.y !== origin.y;
+    if (moved) rememberedPosition = { x: bounds.x, y: bounds.y };
+    // Apply any scale/display changes deferred during the drag using the latest
+    // geometry, never the drag-start size; programmatic moves are not saved.
+    placeWindow();
+    if (moved && rememberedPosition && !position.savePosition(positionFile, rememberedPosition)) {
+      trace('[trace] 保存窗口位置失败');
+    }
+  }
+  return true;
+});
 
 ipcMain.handle('island:hide', () => {
   requestedHidden = true;
