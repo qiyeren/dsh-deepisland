@@ -21,7 +21,12 @@ app.disableHardwareAcceleration();
 app.whenReady().then(async () => {
   session.defaultSession.webRequest.onBeforeRequest((d, cb) => cb({ cancel: !d.url.startsWith('file:') }));
   let jumped = null; let acks = 0; let jumpKind = 'bridged'; let pendingJump = null; const interactive = []; const drag = []; let lastAck = null;
-  ipcMain.handle('island:set-interactive', (_e, value) => { interactive.push(value); return true; });
+  let onNextRelease = null;
+  ipcMain.handle('island:set-interactive', (_e, value) => {
+    interactive.push(value);
+    if (!value && onNextRelease) { const next = onNextRelease; onNextRelease = null; next(); }
+    return true;
+  });
   ipcMain.handle('island:jump', (_e, arg) => { jumped = arg; return pendingJump || { kind: jumpKind, brief: 'synthetic', nudgeCaptured: !!arg.nudgeId }; });
   ipcMain.handle('island:nudge-ack', (_e, arg) => { acks++; lastAck = arg; return { ok: true }; });
   for (const phase of ['start', 'move', 'end']) ipcMain.handle('island:drag-' + phase, (_e, point) => { drag.push({ phase, point }); return true; });
@@ -33,6 +38,35 @@ app.whenReady().then(async () => {
   await win.loadFile(path.join(src, 'index.html'));
   const send = (rev, entries, nudges, glowEffect = true) => win.webContents.send('island:snapshot', { v: 2, rev, entries, nudges, config: { scale: 1, glowEffect, expandOnHover: false }, bridge: { ok: true, port: 0, pending: 0 } });
   const wait = () => new Promise(r => setTimeout(r, 500));
+  // No live rows, but a retained completion can still be viewed by hovering «暂无会话».
+  const mode = () => win.webContents.executeJavaScript("document.querySelector('#island').dataset.mode");
+  const cursor = pos => win.webContents.send('island:cursor', pos);
+  const center = await win.webContents.executeJavaScript('innerWidth / 2');
+  win.webContents.send('island:snapshot', { rev: 'idle-hover', entries: [], nudges: [{ id: 'retained', sessionId: 'ended', kind: 'completed', label: '已完成' }], config: { expandOnHover: true } });
+  cursor({ inside: true, x: center, y: 7 }); await wait();
+  if (await mode() !== 'hud' || interactive.at(-1) !== true) throw new Error('Idle reminder must open on hover');
+  // Model the two distinct native samples: cross the transparent margin, then leave the window
+  // during the close grace period. Wait for the actual click-through IPC, not a guessed frame time.
+  onNextRelease = () => cursor({ inside: false });
+  cursor({ inside: true, x: 1, y: 490 }); await wait();
+  if (onNextRelease || interactive.at(-1) !== false) throw new Error('Transparent margin must release pointer before window exit');
+  if (await mode() !== 'compact') throw new Error('Idle hover stayed expanded after margin → window exit without a new snapshot');
+  cursor({ inside: false }); await wait();
+  if (await mode() !== 'compact') throw new Error('Duplicate leave must not reopen the island');
+  cursor({ inside: true, x: center, y: 7 }); await wait();
+  if (await mode() !== 'hud' || !await win.webContents.executeJavaScript("document.querySelector('#nudges .nudge')?.checkVisibility()")) throw new Error('Hover again must still show the retained reminder');
+  // Briefly crossing the margin without leaving the window must preserve the grace period.
+  let modeOnReturn;
+  onNextRelease = () => { modeOnReturn = mode(); cursor({ inside: true, x: center, y: 7 }); };
+  cursor({ inside: true, x: 1, y: 490 }); await wait();
+  if (await modeOnReturn !== 'hud' || await mode() !== 'hud' || interactive.at(-1) !== true) throw new Error('Returning within the close grace period must keep the HUD open');
+  const togglePin = () => win.webContents.executeJavaScript("document.querySelector('#h-hint').click()");
+  await togglePin(); cursor({ inside: false }); await wait();
+  if (await mode() !== 'hud' || interactive.at(-1) !== false) throw new Error('Pinned HUD must remain open but pass clicks through outside');
+  await togglePin();
+  send('waiting-leave', [{ id: 'waiting-hover', label: '待回答', status: 'waiting' }], []);
+  cursor({ inside: true, x: center, y: 7 }); await wait(); cursor({ inside: false }); await wait();
+  if (await mode() !== 'hud' || interactive.at(-1) !== false) throw new Error('Waiting HUD must remain open without capturing outside clicks');
   for (const status of ['running', 'done', 'failed', 'interrupted']) {
     send('no-main-sweep-' + status, [{ id: 'sweep-session', label: 'Activity remains', status, live: true, glow: '#00D2AA' }], []); await wait();
     const band = await win.webContents.executeJavaScript("(() => { const b = document.querySelector('.band'); return { before: getComputedStyle(b, '::before').animationName, after: getComputedStyle(b, '::after').animationName, label: document.querySelector('#c-title-text').textContent }; })()");

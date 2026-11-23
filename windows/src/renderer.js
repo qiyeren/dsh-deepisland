@@ -716,7 +716,6 @@
     state.pointer = null;
     clearTimeout(state.hoverOpenTimer);
     clearTimeout(state.hoverCloseTimer);
-    const changed = state.overIsland;
     state.overIsland = false;
     // ⚠️ 必须真的通知主进程收回穿透，不能只改本地 state。
     // 反例：指针从岛上直接滑出窗口（document mouseleave）→ 本地以为已经
@@ -725,7 +724,9 @@
     // 那条 false —— 于是 484×300 窗口里的透明区继续吞桌面点击。看门狗只在
     // 「真实光标已出窗口矩形」时兜底，救不了「已回到窗口内透明区」这一段。
     setInteractive(false);
-    if (changed) render();
+    // Crossing transparent pixels can clear overIsland before the close timer fires.
+    // We just cancelled that timer; reconcile the visible mode even on a second leave.
+    if (state.expanded !== shouldExpand()) render();
   }
 
   /* ───────────────────────────── 交互 ───────────────────────────── */
