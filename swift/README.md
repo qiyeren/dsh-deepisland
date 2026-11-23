@@ -11,9 +11,8 @@
 > 插件现在只负责**设置面板 + 一步跳转 + 自动安装**，不画任何东西。
 > 删除理由见仓库根 README 的「为什么删掉窗口内那个岛」。
 
-**同时跟随多个对话。** DSH 可以并行开好几个会话（本机实测同一分钟里有两个会话在写文件），
-只跟「最新那个文件」会丢掉其余对话的状态。现在刘海一次跟随最多 **6 个**活跃会话：
-折叠态显示最该关注的那个 + 会话数徽标（`⚏ 2/3` = 3 个里头 2 个在跑），
+**同时跟随多个对话。** DSH 会话可以并行写入。只跟「最新那个文件」会漏掉其余对话的状态。
+刘海一次跟随最多 **6 个**活跃会话；折叠态显示最该关注的会话和徽标（`⚏ 活跃数/总数`），
 展开态**每个对话各占一行**，按「谁最需要你介入」排序。
 
 ## 多会话：跟谁、排第几
@@ -66,8 +65,8 @@
 |---|---|
 | **折叠态**（208×50，单会话） | 状态点、当前动作、工具名（或子代理并发数）、本回合耗时 |
 | 折叠态·单会话且上下文吃紧 | 占用百分比（>50% 转琥珀、>80% 转红）——常态不占位 |
-| **折叠态·多会话** | 状态点、**主会话**动作、**会话数徽标** `⚏ 2/3`、主会话耗时。上下文百分比与工具名让位（208pt 装不下四样东西） |
-| **展开态·单会话**（440×176） | 状态角标、当前任务、**轮次与步数** `T3·S98`、**工具参数正文**（等宽、最多 3 行）、**待办进度 + 当前待办项**、耗时、工具调用次数、**输出 token**、**上下文占用百分比**、**在飞工具/子代理数**、模型名与权限预设 |
+| **折叠态·多会话** | 状态点、**主会话**动作、**会话数徽标** `⚏ 活跃数/总数`、主会话耗时。上下文百分比与工具名让位（208pt 装不下四样东西） |
+| **展开态·单会话**（440×176） | 状态角标、当前任务、**轮次与步数** `T<轮次>·S<步数>`、**工具参数正文**（等宽、最多 3 行）、**待办进度 + 当前待办项**、耗时、工具调用次数、**输出 token**、**上下文占用百分比**、**在飞工具/子代理数**、模型名与权限预设 |
 | **展开态·多会话**（440×176→235） | 头部（主会话角标 + `N 个会话` + 交互提示）+ **每个对话一行**（状态点 / 会话标题 / 当前动作 / 短标签 / 耗时，主会话行高亮）+ 底部统计行（主会话的耗时 / 工具 / 输出 token / 上下文） |
 
 几条判读规则：
@@ -145,7 +144,7 @@ DSH 在后台时若只投桥，会话确实切了，但窗口还在后台，用�
 - preload 暴露的只有 `dshDesktop` / `dshPlatform` / `__DSH_LOCALE__` 之类，
   **没有任何会话控制能力**（`dshDesktop` = `{browser, deviceInfo, keyboard,
   shortcuts, updates}`，无 shell / 无 fs）。
-- host 的 `127.0.0.1:19387` 是要鉴权的 ACP 传输层，只服务 agent 协议，不是 UI 控制口。
+- 宿主的 ACP 传输层需要鉴权，服务的是 agent 协议，不是 UI 控制口。
 
 所以在没有插件桥的时候，跳转只能是「置前 + 复用 DSH 自己的会话搜索」。
 
@@ -177,7 +176,7 @@ SwiftUI 里子视图手势优先于父视图，一旦整块接管，展开态就
 
 ## 形状：为什么是「刘海的矩形延伸」
 
-本机实测（MacBook Air 13" 1280×832 @2x）：
+几何设计依据（MacBook Air 13″，1280×832 @2x 的参考布局）：
 
 ```
 auxiliaryTopLeftArea  = (0, 804, 562, 28)
@@ -229,8 +228,8 @@ auxiliaryTopRightArea = (718, 804, 562, 28)
 **别人要装到自己机器上 → 看 [`INSTALL.md`](./INSTALL.md)**（两条路：下载现成包 / 从源码编译，
 含 Gatekeeper 放行与卸载）。下面只讲本仓库的构建脚本。
 
-本机只有 Command Line Tools（无完整 Xcode），`swift build` 会报
-`unable to lookup item 'PlatformPath'`，因此**直接用 `swiftc`**。已封装成脚本：
+只安装 Command Line Tools、没有完整 Xcode 时，`swift build` 可能报
+`unable to lookup item 'PlatformPath'`。本项目提供直接调用 `swiftc` 的构建脚本：
 
 ```bash
 cd swift
@@ -257,18 +256,9 @@ swiftc -O -sdk "$SDK" -target "$(uname -m)-apple-macos13.0" -parse-as-library \
   -o .build/DSHNotch Sources/DSHNotch/Core/*.swift Sources/DSHNotch/UI/*.swift Sources/DSHNotch/App.swift
 ```
 
-### 发布：由 CI 产出，不在这台机器上发
+### 历史发布流程：由 CI 构建
 
-作者本机网络对 `api.github.com` 是 **SNI 级阻断**，实测三连：
-
-| 检查 | 结果 |
-| :--- | :--- |
-| `dig api.github.com` | 被污染成 `199.59.148.9`（不是 GitHub 的 IP） |
-| `doh.pub` 拿真实 IP `20.205.243.168` 后直连 | 超时，0 字节 |
-| `github.com` | 正常 200 / 1.8s |
-
-所以 `gh release create` 在这里永远 502/超时，但 `git push` 一直好使 ——
-git 走的是另一条链路。于是发布改成**推 tag 触发 GitHub Actions**（runner 在境外）：
+历史流程使用 GitHub Actions：推送版本 tag 后，由 runner 编译、打包并上传产物，无需开发机调用 Release API。如果 `git push` 正常而 Release API 超时，分别检查 API 域名的 DNS 解析、TLS 连接和服务状态；网页可访问不等于 API 可用。
 
 ```bash
 # 版本号在 swift/Resources/Info.plist 的 CFBundleShortVersionString
@@ -283,8 +273,7 @@ git tag -a v0.3.1 -m "DSH Notch 0.3.1" && git push origin v0.3.1   # 这一步�
 CI 上没有登录图形会话，所以 `build.sh package` 里「运行自检」那一项会被
 `DSHNOTCH_SKIP_SELFTEST=1` 跳过；「zstdlite 已随包」「代码签名完好」两项照跑。
 
-> 发完之后自己若要装同一版本，别用 `releases/download` 直链 —— 国内实测返回 404，
-> 用 [`INSTALL.md`](./INSTALL.md) 里给的镜像前缀下载。
+> 安装步骤见 [`INSTALL.md`](./INSTALL.md)。
 
 ## 自检（不靠肉眼的七条路径）
 
@@ -341,9 +330,7 @@ DSH_NOTCH_VERBOSE=1 ./.build/DSHNotch &     # 前台可看日志
 ```
 
 自检把 `leftMouseDown/Up` 直接 `sendEvent` 进窗口，断言「点击 → 钉住翻转」。
-**为什么不用 `CGEvent.post(tap: .cghidEventTap)`**：它需要辅助功能授权
-（本机 `AXIsProcessTrusted = false`），事件会被系统**静默丢弃**——
-探针打印「已合成点击」但宿主端毫无反应，看起来像应用坏了，其实是权限问题。
+**为什么不用 `CGEvent.post(tap: .cghidEventTap)`**：它需要辅助功能授权。未授权时，系统可能静默丢弃事件；探针生成了点击并不等于应用收到了点击。
 
 ### 5. 投影解析 + 事件流端到端
 
@@ -356,12 +343,9 @@ DSH_NOTCH_VERBOSE=1 ./.build/DSHNotch &     # 前台可看日志
 - **合成 fixture** 精确断言每个字段（局部数据里字段可能恰好缺失，覆盖不到边界），
   外加容错用例（空数据 / 非 JSON / 缺 record / `val` 为 null），
   以及「历史重放的 `turn/end` 不给新回执期」。
-- **本机真实投影缓存**全部解析成功（当前 9 个），并把最近 3 个会话的
-  事件流跑一遍游标，与**测试自己独立重算的期望值**对比：
-  本回合工具计数、当前轮次、step 是否可取得、子代理数是否为 0。
-  期望值不经过被测代码，所以能真正判出游标算错。
+- **可选的本地数据校验**：比较投影与事件流游标，并让测试独立计算期望值，核对本回合工具计数、轮次、step 和子代理并发数。期望值不经过被测代码。
 
-同时打印投影相对事件流的滞后量（实测 0）。当前：**88 项断言全通过**。
+投影滞后量用事件流的最大序号减去投影各行的最大序号；本地测试结果不作为其他会话同步程度的保证。
 
 ### 6. 像素采样（判断形状/布局是否溢出）
 
@@ -374,7 +358,7 @@ DSH_NOTCH_VERBOSE=1 ./.build/DSHNotch &     # 前台可看日志
 图片缩放骗到**（本项目就发生过一次：判定「光晕溢出岛体」，程序采样后
 证明岛体精确位于 [420, 860] pt、两侧光晕各只外扩 5pt，完全是错觉）。
 
-多会话的高度差也只有这样才敢下结论。6 个会话的实测输出：
+下面是 `preview-multi-6.png` 合成布局的像素采样，用于验证六行上限的高度：
 
 ```
 y=120  黑底[840-1719]          → 岛体 = 420…860 pt（440 宽、水平居中 ✅）
@@ -403,11 +387,11 @@ y=480  黑底[-]                 → 底部在 470px = 235pt ✅ 正好等于设
 - **真实发现**：走完整 `poll` 路径（发现 → 解压 → 游标 → 投影 → 排序），
   断言候选数 = 轮询结果数、每个都有展示名、按 mtime 倒序、
   降频轮不丢会话、`reset()` 后能重建。
-  输出示例（保留当时的数量与状态，会话标识和标题为虚构值）：
+  输出格式（占位符表示运行时填入的字段）：
 
-```
-候选会话 2 个: session-111111, session-222222
-首帧: 会话 2 个 [整理示例文档(idle), 检查示例构建(idle)] 主会话「DeepSeek 待命」
+```text
+候选会话 <数量> 个: <候选标识列表>
+首帧: 会话 <数量> 个 [<展示名>(<状态>), …] 主会话「<动作>」
 ```
 
 ### 8. 跳转链路（`./build.sh jump-test`）
@@ -425,15 +409,13 @@ y=480  黑底[-]                 → 底部在 470px = 235pt ✅ 正好等于设
 ```
 $ ./build.sh jump-test
 · dsh://open 深链与系统处理器
-  ✓ 系统已注册 dsh:// 处理器：/Applications/DeepSeek Harness.app
-  ✓ 处理器指向 DeepSeek Harness（DeepSeek Harness.app）
+  <处理器检查结果与应用路径>
 · 反馈文案与权限探测
-  · 辅助功能权限: 已授权（会替用户按 ⌘K ⌘V）
-[dsh-notch] 跳转自检结束：通过 15，失败 0
+  · 辅助功能权限: <自检进程的权限状态>
+[dsh-notch] 跳转自检结束：通过 <数量>，失败 <数量>
 ```
 
-注意最后那行权限是**自检进程**的（继承终端），别拿它当 app 的结论 ——
-看启动诊断文件。
+这里展示的是输出格式。权限行只反映**自检进程**；要判断安装后的 App，请看它自己的启动诊断。
 
 ## 数据来源（两个本地数据源）
 
@@ -448,12 +430,12 @@ $ ./build.sh jump-test
 ~/.dsh/sessions/<项目路径>/<session-id>/session.v4.jsonl.zstd
 ```
 
-zstd 压缩的 JSONL，每行一条事件。结构（逆向 dsh 0.2.0-rc.2 确认）：
+zstd 压缩的 JSONL，每行一条事件。下面是**合成示例**，`time` 为 Unix 毫秒时间戳，示例取零点，不代表实际活动时刻：
 
 ```json
-{ "type": "tool/call", "seq": 29, "time": 1791042626255,
-  "data": { "turn": 1, "step": 23, "callId": "call_…", "name": "bash",
-            "arguments": "{\"command\":\"ls -la …\"}" } }
+{ "type": "tool/call", "seq": 1, "time": 0,
+  "data": { "turn": 1, "step": 1, "callId": "example-call", "name": "bash",
+            "arguments": "{\"command\":\"echo example\"}" } }
 ```
 
 - `arguments` 是**内嵌 JSON 的字符串**，需二次解析。
@@ -484,17 +466,7 @@ zstd 压缩的 JSONL，每行一条事件。结构（逆向 dsh 0.2.0-rc.2 确�
 | `title` | DSH 自己总结的会话标题 | 比第一句 prompt 干净 |
 | `subagentCatalog` | 已派生的子代理目录 | 只有 `{id, createdAt, mode, label}`，**不含运行态** |
 
-**关键实证：投影与事件流完全同步。** 实测三个会话的 `proj.seq` 与
-`events.maxSeq` 逐一相等（滞后 0 个事件序号），所以它可以当实时数据源用。下列会话标识为虚构值：
-
-```
-session-33333333  proj.seq=544  events.maxSeq=544
-session-22222222  proj.seq=88   events.maxSeq=88
-session-44444444  proj.seq=75   events.maxSeq=75
-```
-
-（注意 `row.seq` 是「该值最后一次变化」的序号，通常小于 `maxSeq` 属正常；
-这里比较的是所有 row 的最大 seq。）
+**如何判断投影有没有跟上事件流：** 比较同一会话的两个值：`proj.seq` 是投影所有行的最大序号，`events.maxSeq` 是已读事件的最大序号。两者相等，表示这次读取时已对齐；投影序号较小，则仍有滞后。单独一行的 `row.seq` 只表示该值最后一次变化，不应拿它代表整个投影。
 
 ### 关于子代理并发数
 
@@ -540,9 +512,8 @@ DSH 的会话文件是 zstd 压缩的，而 macOS SDK **不提供 libzstd**。
 → App 可执行文件同目录 → `~/.local/bin/zstdlite` → `zstd`（homebrew/系统）→ `$PATH`。
 
 > **`Contents/Resources` 这一条是分发的前提。** 早期只找「可执行文件同目录」，
-> 而 `build.sh` 把工具放在 `Contents/Resources` —— 两者对不上，本机因为恰好有
-> `~/.local/bin/zstdlite` 才没暴露；别人拿到 `.app` 是没有那份的，
-> 会完全读不到会话（面板一直空白）。`./build.sh package` 的打包自证里加了这条检查。
+> 而 `build.sh` 把工具放在 `Contents/Resources`。开发环境里的 `~/.local/bin/zstdlite`
+> 可能掩盖漏打包的问题，导致其他用户读不到会话。`./build.sh package` 的打包自证会检查资源目录。
 
 ## 诊断
 
@@ -557,43 +528,36 @@ DSH_NOTCH_VERBOSE=1 /Applications/DSHNotch.app/Contents/MacOS/DSHNotch
 
 ### 启动诊断文件（日志读不到时的唯一线索）
 
-本机统一日志**读不到本进程的 NSLog**（`log show` 与 `log stream` 都抓不到，
-实测 0 行），而这是个没有终端的常驻 GUI —— 出问题时手里一点线索都没有。
-所以每次启动都会覆盖写一份：
+GUI 应用通常没有终端，`log show` 或 `log stream` 也未必能取得启动日志。每次启动会覆盖写入以下诊断文件：
 
 ```
 ~/Library/Application Support/DSHNotch/last-launch.txt
 ```
 
-真实样例：
+以下是输出格式，不含真实设备或会话的读数：
 
-```
+```text
 DSH Notch 启动诊断
-屏幕: 屏幕 1280×832@2x | 刘海 156×28 @(x=562,y=804) | 折叠 208×50 | 展开 440×176（单会话）/ 最高 235（6 会话）
-DSH 运行中: true
-辅助功能权限: 未授权 → 点对话只置前 DSH + 复制标题
+屏幕: <屏幕尺寸与缩放> | 刘海 <尺寸与位置> | 折叠 <尺寸> | 展开 <尺寸>
+DSH 运行中: <true 或 false>
+辅助功能权限: <已授权或未授权>
 跳转深链: dsh://open
-会话候选: 1 个
+会话候选: <数量> 个
 ```
 
-**「辅助功能权限」这行只能由这个文件给出**：命令行里跑自检时
-`AXIsProcessTrusted()` 会继承终端/宿主 App 的授权，和装到 /Applications 后的
-真实进程不是一回事（本机实测：命令行报「已授权」，真实 app 报「未授权」）。
+**检查已安装 App 的辅助功能权限，请以它写入的启动诊断为准。** 命令行运行
+`AXIsProcessTrusted()` 时使用的终端或宿主 App 授权，可能与实际 App 不同。
 
-典型输出（保留实测数值，会话标识和标题为虚构值）：
+启用详细日志后，还可以看到解码和投影进度，格式如下：
 
-```
-屏幕度量: 屏幕 1280×832@2x | 刘海 156×28 @(x=562,y=804) | 折叠 208×50 | 展开 440×176（单会话）/ 最高 235（6 会话）
-候选会话 2 个: session-111111, session-222222
-loadEvents: session.v4.jsonl.zstd 解压 161562 字节 / 90 行 → 解码成功 90 条
-projections: session-22222222….json seq=159 turns=6 steps=16 out=10567 ctx=1.5%
-首帧: 会话 2 个 [整理示例文档(idle), 检查示例构建(idle)] 主会话「DeepSeek 待命」
-会话 2 个: 整理示例文档(idle,待命) | 检查示例构建(idle,待命)
+```text
+loadEvents: session.v4.jsonl.zstd 解压 <字节> / <行数> 行 → 解码成功 <条数> 条
+projections: session-<id>.json seq=<序号> turns=<回合> steps=<步数> out=<输出量> ctx=<占比>
+会话 <数量> 个: <会话标题>(<状态>,<摘要>)
 ```
 
-最后一行每秒打一次，就是多会话监控的现场快照：两个对话各自的**标题**与状态。
-注意它们是 `idle` 而不是「已完成」—— 那是停摆降级在起作用（文件早就不写了），
-修这条之前，岛启动时会挂一排假的「任务已完成」。
+最后一行是多会话快照。若文件停止更新，会话可显示 `idle`；这不等于任务已完成。
+共享日志排障前，请移除会话标识、标题、路径和本机读数。
 
 ## 踩坑记录
 
@@ -616,7 +580,7 @@ projections: session-22222222….json seq=159 turns=6 steps=16 out=10567 ctx=1.5
    一条自身窗口都查不到，会误判「窗口不存在」。至少等 1 秒再查。
 7. **外部工具读别的应用窗口几何不可信** —— 无屏幕录制权限时
    `CGWindowListCopyWindowInfo` 返回的列表被裁剪、数值被改写；
-   `screencapture` 在此环境下直接报 `could not create image from display`。
+   此时 `screencapture` 也可能无法抓图。
    自证（进程内查自己的窗口）才是可信源，两者对不上时以自证为准。
 8. **`-dc` 参数会让 zstdlite 静默失败** —— 它只认 `-d`。更糟的是当时把
    stderr 接到了 `FileHandle.nullDevice`，`terminationStatus != 0` 就直接
@@ -650,10 +614,9 @@ projections: session-22222222….json seq=159 turns=6 steps=16 out=10567 ctx=1.5
 18. **`turn`/`step` 只在 `step/start` 里取是漏的** —— `tool/call`、`tool/result`
     的 `data` 同样带这两个字段。只认 `step/start` 会让进度徽标停在很久以前。
     改成「任何带 `turn`/`step` 的事件都同步」，并由 `turn/start` 负责归零。
-19. **不要凭印象给数据源下结论** —— 我曾判定 `session_projcache` 「只有 UI 投影、
-    无实时运行状态、不适合做监控」，实测发现它带 `sessionStats` / `contextPressure` /
-    `tokenUsage` / `pendingCalls`，且 `seq` 与事件流**逐一对齐（滞后 0）**。
-    一个反例：`app.asar` 里根本搜不到 `subagentsByParent`，而我一直以为那是宿主 API。
+19. **不要凭字段名称判断数据源是否实时** —— `session_projcache` 带有 `sessionStats`、
+    `contextPressure`、`tokenUsage` 与 `pendingCalls` 等字段。判断滞后应比较投影和事件流的序号；
+    不要假设所有投影都实时，也不要假设存在 `subagentsByParent` 这样的宿主 API。
 20. **子代理并发数没有现成字段可读** —— 事件流不含子代理信息；投影
     `subagentCatalog` 只记 `{id, createdAt, mode, label}`（无运行态）；
     `subagent` row 只在「本会话自己是子代理」时才有值。

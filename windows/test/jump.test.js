@@ -15,10 +15,10 @@ const check = (name, cond, detail = '') => {
   else { fail++; console.log('  ❌ ' + name + (detail ? '  → ' + detail : '')); }
 };
 
-const ENTRY = { id: 'session-abc', label: '高难度数学试卷出题' };
+const ENTRY = { id: 'session-abc', label: '示例会话标题' };
 
 console.log('=== W1: 剪贴板文本 ===');
-check('用标题', clipboardText(ENTRY) === '高难度数学试卷出题', clipboardText(ENTRY));
+check('用标题', clipboardText(ENTRY) === '示例会话标题', clipboardText(ENTRY));
 check('标题为空时退回 id', clipboardText({ id: 'session-x', label: '   ' }) === 'session-x',
   clipboardText({ id: 'session-x', label: '   ' }));
 check('全空不崩', typeof clipboardText({}) === 'string');
@@ -50,7 +50,7 @@ console.log('\n=== W2: 首选路径 —— 桥通 ===');
   check('usedBridge = false', r.usedBridge === false);
   check('isSuccess = true（降级也算成功）', r.isSuccess === true);
   check('brief 提示 Ctrl+K', /Ctrl\+K/.test(r.brief), r.brief);
-  check('剪贴板写的是标题', copied === '高难度数学试卷出题', String(copied));
+  check('剪贴板写的是标题', copied === '示例会话标题', String(copied));
   check('降级也按顺序走完 置前→投桥→复制', calls.join('>') === 'activate>post>copy', calls.join('>'));
 
   console.log('\n=== W4: 彻底失败 ===');

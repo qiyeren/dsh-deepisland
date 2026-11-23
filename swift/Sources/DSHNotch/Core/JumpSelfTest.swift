@@ -121,8 +121,8 @@ final class JumpSelfTest {
     // MARK: - 剪贴板文本
 
     private func testClipboardText() {
-        let normal = entry(label: "高难度数学试卷出题", id: "session-abc12345")
-        check(SessionJump.clipboardText(for: normal) == "高难度数学试卷出题",
+        let normal = entry(label: "示例会话标题", id: "session-abc12345")
+        check(SessionJump.clipboardText(for: normal) == "示例会话标题",
               "正常标题原样进剪贴板")
 
         let blank = entry(label: "   ", id: "session-abc12345")

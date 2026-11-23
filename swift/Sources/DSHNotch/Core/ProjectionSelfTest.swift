@@ -49,73 +49,73 @@ final class ProjectionSelfTest {
         check(empty?.isEmpty == true, "空 rows 应判定 isEmpty")
     }
 
-    // MARK: - 字段解析（fixture 照抄本机真实结构）
+    // MARK: - 字段解析（保留协议结构，所有会话值均为合成数据）
 
     private func testFixtureParsing() {
         print("· 字段解析")
         let json = """
         {"version":7,"record":{"rows":{
-         "tokenUsage":{"ver":1,"seq":544,"val":{"totals":{
-           "uncachedInputTokens":2106768,"outputTokens":39369,
-           "cacheReadTokens":1704232,"cacheWriteTokens":0}}},
-         "contextPressure":{"ver":1,"seq":544,"val":{
-           "surfaceTokens":77628,"contextWindow":262144,"pressureTokens":54829}},
-         "sessionStats":{"ver":1,"seq":544,"val":{"turns":3,"steps":98,"llmMs":993847,
-           "toolMs":873876,"lastTurn":3,"openStep":null,
-           "pendingCalls":{"call_a":1791042626255}}},
-         "todos":{"ver":2,"seq":544,"val":{"todos":[
-           {"content":"调研开源项目","status":"completed"},
-           {"content":"设计技术蓝图","status":"in_progress"}]}},
-         "modelSelection":{"ver":2,"seq":544,"val":{
-           "lastUsed":{"provider":"itti","model":"gemini-3.8-flash-high"},"pending":null}},
-         "plan":{"ver":3,"seq":544,"val":{"active":true,"wanted":null,"running":null}},
-         "permissions":{"ver":2,"seq":544,"val":{"preset":"danger-full-access"}},
-         "title":{"ver":1,"seq":20,"val":"刘海屏智能体插件调研"}
+         "tokenUsage":{"ver":1,"seq":40,"val":{"totals":{
+           "uncachedInputTokens":1728000,"outputTokens":24680,
+           "cacheReadTokens":272000,"cacheWriteTokens":0}}},
+         "contextPressure":{"ver":1,"seq":41,"val":{
+           "surfaceTokens":13840,"contextWindow":40000,"pressureTokens":8000}},
+         "sessionStats":{"ver":1,"seq":42,"val":{"turns":4,"steps":16,"llmMs":32000,
+           "toolMs":4800,"lastTurn":4,"openStep":null,
+           "pendingCalls":{"call_fixture_card":1000000000000}}},
+         "todos":{"ver":2,"seq":36,"val":{"todos":[
+           {"content":"画一个示例圆形","status":"completed"},
+           {"content":"给示例圆形填色","status":"in_progress"}]}},
+         "modelSelection":{"ver":2,"seq":12,"val":{
+           "lastUsed":{"provider":"fixture-provider","model":"fixture-model"},"pending":null}},
+         "plan":{"ver":3,"seq":11,"val":{"active":true,"wanted":null,"running":null}},
+         "permissions":{"ver":2,"seq":10,"val":{"preset":"workspace-write"}},
+         "title":{"ver":1,"seq":9,"val":"示例形状卡片"}
         }}}
         """
         guard let p = ProjectionCache.parse(Data(json.utf8)) else {
             check(false, "fixture 应解析成功")
             return
         }
-        checkEqual(p.seq, 544, "seq 取各 row 最大值")
-        checkEqual(p.outputTokens, 39369, "输出 token")
-        checkEqual(p.uncachedInputTokens, 2106768, "未缓存输入 token")
-        checkEqual(p.cacheReadTokens, 1704232, "缓存命中 token")
-        checkEqual(p.totalInputTokens, 3811000, "累计输入 = 未缓存 + 缓存命中")
-        checkEqual(p.contextUsed, 77628, "上下文占用")
-        checkEqual(p.contextWindow, 262144, "上下文窗口")
-        checkEqual(p.turns, 3, "回合数")
-        checkEqual(p.steps, 98, "步数")
+        checkEqual(p.seq, 42, "seq 取各 row 最大值")
+        checkEqual(p.outputTokens, 24680, "输出 token")
+        checkEqual(p.uncachedInputTokens, 1728000, "未缓存输入 token")
+        checkEqual(p.cacheReadTokens, 272000, "缓存命中 token")
+        checkEqual(p.totalInputTokens, 2000000, "累计输入 = 未缓存 + 缓存命中")
+        checkEqual(p.contextUsed, 13840, "上下文占用")
+        checkEqual(p.contextWindow, 40000, "上下文窗口")
+        checkEqual(p.turns, 4, "回合数")
+        checkEqual(p.steps, 16, "步数")
         checkEqual(p.hasOpenStep, false, "openStep 为 null → 无未闭合 step")
-        checkEqual(p.pendingCallIds, ["call_a"], "在飞调用 callId")
+        checkEqual(p.pendingCallIds, ["call_fixture_card"], "在飞调用 callId")
         checkEqual(p.todoTotal, 2, "待办总数")
         checkEqual(p.todoDone, 1, "已完成待办数")
-        checkEqual(p.todoCurrent, "设计技术蓝图", "当前待办 = in_progress 那条")
-        checkEqual(p.modelName, "gemini-3.8-flash-high", "模型名")
-        checkEqual(p.provider, "itti", "provider")
+        checkEqual(p.todoCurrent, "给示例圆形填色", "当前待办 = in_progress 那条")
+        checkEqual(p.modelName, "fixture-model", "模型名")
+        checkEqual(p.provider, "fixture-provider", "provider")
         checkEqual(p.planActive, true, "plan 模式")
-        checkEqual(p.permissionPreset, "danger-full-access", "权限预设")
-        checkEqual(p.title, "刘海屏智能体插件调研", "会话标题")
+        checkEqual(p.permissionPreset, "workspace-write", "权限预设")
+        checkEqual(p.title, "示例形状卡片", "会话标题")
         checkEqual(p.hasTodo, true, "有待办")
         checkEqual(p.isEmpty, false, "非空投影")
 
-        // 上下文比例 ≈ 29.6%
+        // 上下文比例：13840 / 40000 = 34.6%
         if let f = p.contextFraction {
-            check(abs(f - 0.29613) < 0.001, "上下文比例 ≈ 29.6%，实际 \(f)")
+            check(abs(f - 0.346) < 0.001, "上下文比例应为 34.6%，实际 \(f)")
         } else {
             check(false, "上下文比例应可算出")
         }
 
         // token 紧凑格式
         checkEqual(Projections.shortTokens(999), "999", "短 token <1000")
-        checkEqual(Projections.shortTokens(39369), "39.4k", "短 token 万级")
-        checkEqual(Projections.shortTokens(2106768), "2.1M", "短 token 百万级")
+        checkEqual(Projections.shortTokens(24680), "24.7k", "短 token 万级")
+        checkEqual(Projections.shortTokens(1728000), "1.7M", "短 token 百万级")
 
         // 上下文分档（Activity 层）
         var a = Activity()
         a.proj = p
-        checkEqual(a.contextText, "30%", "上下文文本四舍五入")
-        checkEqual(a.contextLevel, 0, "30% 属常规档")
+        checkEqual(a.contextText, "35%", "上下文文本四舍五入")
+        checkEqual(a.contextLevel, 0, "35% 属常规档")
         checkEqual(a.todoText, "1/2", "待办进度文本")
         checkEqual(a.turnStepText, nil, "无 turn/step 时徽标为空")
 

@@ -443,9 +443,9 @@
     }
     for (const n of state.nudges) {
       if (!n || !n.sessionId || (n.kind !== 'needs_choice' && n.kind !== 'failed')) continue;
-      // A settled question remains in the server queue but no longer creates
-      // an urgent island. Do not suppress a separately observed live wait.
-      if (n.kind === 'needs_choice' && n.resolved === true) continue;
+      // The host can settle a question or a failure without removing its ID.
+      // Ignore only that event, not a live wait or a later failure in the session.
+      if (n.resolved === true) continue;
       let item = bySession.get(n.sessionId);
       if (!item) {
         item = { id: n.sessionId, label: n.label || '会话', kind: 'failed', waiting: false, ids: [], choices: [] };

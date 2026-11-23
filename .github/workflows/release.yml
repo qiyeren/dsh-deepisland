@@ -1,10 +1,6 @@
 name: Release
 
-# 为什么发布要放在 CI 上：
-#   作者本机所在的网络对 api.github.com 是 SNI 级阻断（github.com 正常，
-#   所以 git push 一直好使，但 gh release create 永远 502/超时）。
-#   Actions runner 在境外，创建 release 与上传附件都不受这条链路影响。
-#   git push 走 git 协议，因此「推 tag 触发发布」这条路是通的。
+# 使用 CI 构建并上传发行包，无需开发机直接访问发布 API。
 on:
   push:
     tags:

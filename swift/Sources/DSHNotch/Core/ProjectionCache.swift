@@ -7,14 +7,14 @@ import Foundation
 /// 做折叠（fold）之后的**状态快照**，含 token 用量、上下文压力、会话统计、
 /// 待办、模型选择等。这些要么在事件流里得自己重算，要么事件本身不带。
 ///
-/// 文件形如：
+/// 以下为虚构数值的结构示例：
 /// ```json
 /// { "version": 7,
 ///   "record": { "rows": {
-///     "tokenUsage":      { "ver": 1, "seq": 544, "val": { "totals": {…}, "last": {…} } },
-///     "contextPressure": { "ver": 1, "seq": 544, "val": { "surfaceTokens": 77628, … } },
-///     "sessionStats":    { "ver": 1, "seq": 544, "val": { "turns": 3, "steps": 98, … } },
-///     "todos":           { "ver": 2, "seq": 544, "val": null },
+///     "tokenUsage":      { "ver": 1, "seq": 42, "val": { "totals": {…}, "last": {…} } },
+///     "contextPressure": { "ver": 1, "seq": 42, "val": { "surfaceTokens": 13840, … } },
+///     "sessionStats":    { "ver": 1, "seq": 42, "val": { "turns": 4, "steps": 16, … } },
+///     "todos":           { "ver": 2, "seq": 42, "val": null },
 ///     …
 ///   } } }
 /// ```
@@ -83,7 +83,7 @@ struct Projections: Equatable {
             && todoTotal == 0 && modelName == nil && title == nil && permissionPreset == nil
     }
 
-    /// token 数的紧凑写法：1234 → "1.2k"，39369 → "39.4k"，2106768 → "2.1M"
+    /// token 数的紧凑写法：1234 → "1.2k"，24680 → "24.7k"，1728000 → "1.7M"
     static func shortTokens(_ n: Int) -> String {
         if n < 1000 { return "\(n)" }
         if n < 999_500 {

@@ -1,5 +1,5 @@
 'use strict';
-// 把 windows/ 下的新源码打成 app.asar（替代 electron-builder 的打包，避开本机 MITM 代理下载证书问题）。
+// 从 windows/ 下的源码直接构建 app.asar，不需要下载 Electron 运行时。
 // 用法: node scripts/make-asar.js [输出路径]
 const fs = require('node:fs');
 const path = require('node:path');

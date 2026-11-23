@@ -9,7 +9,7 @@
  * 最初的设想是「解析 session.v4.jsonl.zstd 的事件流自己算状态」，
  * 实测发现**做不到也不必做**：
  *
- * 1. 真实会话文件里 `type` 只有 `session` 一种（9 个会话全如此），
+ * 1. 一些版本的会话文件仅记录 `session` 类型，
  *    拿不到 `tool/call` 之类的事件 —— 那类事件在别的存储里。
  * 2. DSH 自己把算好的投影写在
  *    `~/.dsh/storages/session_projcache/sessions/<id>.json`，
@@ -29,9 +29,8 @@ const cache = new Map();
 /**
  * 会话 id → 投影文件路径。
  *
- * 命名有**两种历史形态**：`session-<id>.json` 与 `<id>.json`
- * —— 实测 15 个文件里两种都有（`75bd1b20-….json` 和
- * `session-19810e4b-….json` 同时存在），所以两种都要试。
+ * 投影文件有两种历史命名：`session-<id>.json` 与 `<id>.json`。
+ * 两者都要尝试；`<id>` 表示调用方传入的会话标识。
  *
  * 兜底再扫一遍目录按子串匹配：命名规则若再变也能命中。
  *
@@ -132,8 +131,8 @@ function parse(text) {
   /**
    * 取一个 row，并顺带把 seq 推高。
    *
-   * ⚠️ `val` **不一定是对象** —— 实测真实文件里：
-   *   title    → `val: "高难度数学试卷出题"`   ← 裸字符串！
+   * ⚠️ `val` **不一定是对象**。以下是合成示例：
+   *   title    → `val: "示例标题"`              ← 裸字符串！
    *   todos    → `val: null`
    *   plan     → `val: {…}`                    ← 对象
    *
@@ -292,7 +291,7 @@ function totalInputTokens(p) {
 }
 
 /**
- * token 数的紧凑写法：1234 → "1.2k"，39369 → "39.4k"，2106768 → "2.1M"。
+ * token 数的紧凑写法：1234 → "1.2k"，24680 → "24.7k"，1728000 → "1.7M"。
  * 与 Swift 版 `Projections.shortTokens` 逐档一致。
  */
 function shortTokens(n) {

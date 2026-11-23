@@ -2,9 +2,9 @@ import Foundation
 
 /// 一条 DSH 会话事件（对应 session.v4.jsonl.zstd 解压后的单行 JSON）。
 ///
-/// 真实结构（逆向 dsh 0.2.0-rc.2 确认，见 test fixtures）：
+/// 字段结构示例（事件标识、时间与数据为合成值）：
 /// ```json
-/// { "type": "tool/call", "seq": 29, "time": 1791042626255,
+/// { "type": "tool/call", "seq": 3, "time": 1000,
 ///   "data": { "turn": 1, "callId": "call_…", "name": "bash",
 ///             "arguments": "{\"command\":\"ls -la …\"}" } }
 /// ```

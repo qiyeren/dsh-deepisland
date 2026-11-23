@@ -30,31 +30,31 @@ enum PreviewRenderer {
                         activity: sample(status: .tool, title: "执行 bash",
                                          detail: "ls -la ~/.dsh/sessions | head -20",
                                          tool: "bash", toolCount: 7, elapsedMs: 34_000, now: now,
-                                         proj: richProjections(contextUsed: 77_628)),
+                                         proj: richProjections(contextUsed: 60_000)),
                         expanded: false),
             PreviewCase(name: "preview-compact-waiting.png",
                         activity: sample(status: .waiting, title: "等待人工确认",
                                          detail: "提问: 是否覆盖写回文件？",
                                          tool: "ask", toolCount: 3, elapsedMs: 128_000, now: now,
-                                         proj: richProjections(contextUsed: 168_000), waiting: true),
+                                         proj: richProjections(contextUsed: 130_000), waiting: true),
                         expanded: false),
             PreviewCase(name: "preview-compact-done.png",
                         activity: sample(status: .done, title: "任务已完成", detail: "调用 7 次工具",
                                          tool: nil, toolCount: 7, elapsedMs: 96_000, now: now,
-                                         proj: richProjections(contextUsed: 77_628,
-                                                               todos: [("调研开源项目", "completed"),
-                                                                       ("设计技术蓝图", "in_progress"),
-                                                                       ("写文档", "pending")],
+                                         proj: richProjections(contextUsed: 60_000,
+                                                               todos: [("收集示例数据", "completed"),
+                                                                       ("检查示例格式", "in_progress"),
+                                                                       ("导出示例报告", "pending")],
                                                                pending: [])),
                         expanded: false),
             PreviewCase(name: "preview-expanded.png",
                         activity: sample(status: .tool, title: "执行 edit",
                                          detail: "swift/Sources/DSHNotch/UI/NotchShape.swift",
                                          tool: "edit", toolCount: 12, elapsedMs: 96_000, now: now,
-                                         proj: richProjections(contextUsed: 77_628,
-                                                               todos: [("调研开源项目", "completed"),
-                                                                       ("设计技术蓝图", "in_progress"),
-                                                                       ("写文档", "pending")],
+                                         proj: richProjections(contextUsed: 60_000,
+                                                               todos: [("收集示例数据", "completed"),
+                                                                       ("检查示例格式", "in_progress"),
+                                                                       ("导出示例报告", "pending")],
                                                                pending: ["call_a", "call_b"]),
                                          agents: 1),
                         expanded: true),
@@ -62,7 +62,7 @@ enum PreviewRenderer {
                         activity: sample(status: .tool, title: "执行 bash",
                                          detail: "npm run build --production && npm test",
                                          tool: "bash", toolCount: 23, elapsedMs: 372_000, now: now,
-                                         proj: richProjections(contextUsed: 228_000,
+                                         proj: richProjections(contextUsed: 175_000,
                                                                pending: ["call_a", "call_b",
                                                                          "call_c", "call_d"]),
                                          agents: 2),
@@ -120,13 +120,13 @@ enum PreviewRenderer {
                             sample(status: .waiting, title: "等待人工确认",
                                    detail: "提问: 是否覆盖写回 示例文档.docx？",
                                    tool: "ask", toolCount: 3, elapsedMs: 128_000, now: now,
-                                   proj: richProjections(contextUsed: 168_000), waiting: true),
+                                   proj: richProjections(contextUsed: 130_000), waiting: true),
                             ageSec: 9, project: "--example-workspaces-docs--")
         let tool = entry("示例界面插件",
                          sample(status: .tool, title: "执行 edit",
                                 detail: "swift/Sources/DSHNotch/UI/NotchContentView.swift",
                                 tool: "edit", toolCount: 12, elapsedMs: 96_000, now: now,
-                                proj: richProjections(contextUsed: 77_628),
+                                proj: richProjections(contextUsed: 60_000),
                                 agents: 2),
                          ageSec: 1, project: "--example-workspaces-demo--")
         let thinking = entry("编写示例练习",
@@ -191,22 +191,22 @@ enum PreviewRenderer {
         return a
     }
 
-    /// 造一份接近真实（见 `ProjectionSelfTest` 里的 fixture）的投影快照。
-    private static func richProjections(contextUsed: Int = 77_628,
+    /// 用虚构的固定数值构建预览：各场景覆盖正常、警告和高占用档。
+    private static func richProjections(contextUsed: Int = 60_000,
                                         todos: [(String, String)] = [],
                                         pending: [String] = []) -> Projections {
         var p = Projections()
-        p.seq = 544
-        p.outputTokens = 39_369
-        p.uncachedInputTokens = 2_106_768
-        p.cacheReadTokens = 1_704_232
+        p.seq = 42
+        p.outputTokens = 24_680
+        p.uncachedInputTokens = 1_728_000
+        p.cacheReadTokens = 272_000
         p.contextUsed = contextUsed
-        p.contextWindow = 262_144
-        p.turns = 3
-        p.steps = 98
+        p.contextWindow = 200_000
+        p.turns = 4
+        p.steps = 16
         p.pendingCallIds = pending
         p.provider = "example"
-        p.modelName = "gemini-3.8-flash-high"
+        p.modelName = "example-model"
         p.permissionPreset = "workspace-write"
         p.title = "示例界面调研"
         if !todos.isEmpty {

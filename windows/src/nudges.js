@@ -160,7 +160,10 @@ function selectDisplayItems(fetched, retained, max) {
   // While any live item has the same ID, never expose the retained copy:
   // acknowledgment routes only by ID and could otherwise affect another owner.
   const ids = new Set(live.filter(Boolean).map((item) => item.id));
-  const visible = (item) => item && item.sourceKind !== 'internal';
+  // A recovered child must not occupy a display slot needed by a pending alert.
+  // Keep non-navigable reminders on the main island under their existing rules.
+  const visible = (item) => item && item.sourceKind !== 'internal' &&
+    !(item.kind === 'failed' && item.sessionId && item.resolved === true);
   const order = (a, b) => (a.severity - b.severity) || (b.ts - a.ts);
   return live.filter(visible).sort(order)
     .concat(fallback.filter((item) => visible(item) && !ids.has(item.id)).sort(order))

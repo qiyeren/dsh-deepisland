@@ -5,8 +5,7 @@ import Foundation
 ///
 /// 为什么单独一个：`--self-test-projections` 验的是**单个会话**的解析正确性，
 /// 而这次改动的核心恰恰是「同时监控多个对话」——那条路径原先一行测试都没有。
-/// 本机实测存在同一分钟更新的两个会话（同一项目目录下），所以「候选多于一个」
-/// 是真实场景，不是假设出来的。
+/// 同一项目可以有多个并行会话，因此自检需要覆盖多个候选。
 final class SessionSelfTest {
     private var passed = 0
     private var failed = 0

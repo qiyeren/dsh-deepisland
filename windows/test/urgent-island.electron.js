@@ -73,6 +73,38 @@ app.whenReady().then(async () => {
     if (band.before !== 'none' || band.after !== 'none' || !band.label.includes('Activity remains')) throw new Error('Main island must show activity without sliding light: ' + JSON.stringify({ status, band }));
   }
   const view = () => win.webContents.executeJavaScript(`(() => { const n = document.querySelector('#urgent-island'); if (!n) return null; const r = n.getBoundingClientRect(), p = document.querySelector('#island').getBoundingClientRect(); return { visible: getComputedStyle(n).display !== 'none', text: n.textContent, top: r.top, bottom: r.bottom, parentBottom: p.bottom, height: innerHeight }; })()`);
+  // Drive the real bounded DTO and its content rev, not a hand-incremented revision.
+  // Observe the DOM after the production snapshot listener, without a sleep or polling.
+  const { normalizeItems } = require('../src/nudges.js');
+  const { buildSnapshot } = require('../src/snapshot.js');
+  const assert = require('node:assert/strict');
+  async function expectUrgent(states, items, expected, statesOnline = true) {
+    await win.webContents.executeJavaScript(`window.urgentAfterSnapshot = new Promise(resolve => {
+      const off = window.island.onSnapshot(() => {
+        off();
+        const child = document.querySelector('#urgent-island');
+        resolve(child.checkVisibility() ? ['urgent-kind', 'urgent-label', 'urgent-more'].map(id => document.getElementById(id).textContent) : []);
+      });
+    }); void 0;`);
+    const snap = buildSnapshot({ states, nudges: normalizeItems(items), bridge: { statesOnline } });
+    win.webContents.send('island:snapshot', snap);
+    assert.deepEqual(await win.webContents.executeJavaScript('window.urgentAfterSnapshot'), expected, 'visible urgent item after host snapshot');
+    assert.equal(acks, 0, 'reconciling an urgent failure must never ACK');
+    assert.equal(jumped, null, 'reconciling an urgent failure must never navigate');
+  }
+  const failed = { id: 'failure-1', kind: 'failed', sessionId: 'retry', title: '甲', detail: 'arbitrary diagnostic' };
+  const running = [{ id: 'retry', label: '甲', status: 'running' }];
+  const recovered = { ...failed, resolved: true };
+  const peer = { id: 'peer-failure', kind: 'failed', sessionId: 'peer', title: '乙' };
+  await expectUrgent([{ ...running[0], status: 'failed' }], [failed], ['执行失败', '甲', '']);
+  await expectUrgent([{ id: 'peer', label: '乙', status: 'running' }], [failed], ['执行失败', '甲', '']); // missing row / unrelated start
+  await expectUrgent([], [failed], ['执行失败', '甲', ''], false); // disconnected feed
+  await expectUrgent(running, [failed], ['执行失败', '甲', '']); // running alone is not recovery evidence
+  await expectUrgent(running, [recovered], []); // only the marker changes; old ID remains queued
+  await expectUrgent(running, [recovered, peer], ['执行失败', '乙', '']);
+  await expectUrgent([{ ...running[0], status: 'waiting' }], [recovered, peer], ['等待处理', '甲', '+1']);
+  await expectUrgent(running, [recovered, { ...failed, id: 'failure-2', resolved: false }], ['执行失败', '甲', '']);
+
   send('main-fields', [{ id: 's', label: '会话标题一', status: 'running', tag: 'TOOL', badge: 'OLD BADGE', actionText: 'ACTION', todoText: '1/3', elapsedText: '00:12', contextText: '100%' }, { id: 's2', status: 'done', label: '会话标题二' }], []); await wait();
   const compactText = await win.webContents.executeJavaScript("document.querySelector('#compact').innerText.replace(/\\s/g, '')");
   if (compactText !== '会话标题一运行中') throw new Error('Compact must only display the session name and state: ' + compactText);

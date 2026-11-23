@@ -52,6 +52,23 @@ test('display cap changes apply with unchanged server revision and retained fall
   assert.deepEqual(f.items.map(x => x.id), ['live', 'fallback']);
 });
 
+test('a recovered failure cannot take the last display slot or expose its stale fallback', async () => {
+  const f = fixture();
+  const old = f.item('old', { sessionId: 'a', ts: 3 });
+  const recovered = Object.freeze({ ...old, resolved: true });
+  const peer = f.item('peer', { sessionId: 'b', ts: 2, sourceKind: 'unknown' });
+  f.retain(old);
+  f.retain(f.item('retained-recovered', { sessionId: 'c', ts: 4, resolved: true }));
+  f.set([recovered, peer]);
+  await f.probe(1);
+  assert.deepEqual(f.items.map(x => x.id), ['peer']);
+  await f.probe(3);
+  assert.deepEqual(f.items.map(x => x.id), ['peer'], 'live ID still shadows its unresolved local copy');
+  f.set([recovered, f.item('no-session', { resolved: true })]);
+  await f.probe(1);
+  assert.deepEqual(f.items.map(x => x.id), ['no-session'], 'non-navigable ordinary reminders keep their existing presentation');
+});
+
 test('visible metadata updates even when id/count/time/detail match', async () => {
   const f = fixture();
   f.set([f.item('live', { title: 'old', project: 'old project' })], 'one');

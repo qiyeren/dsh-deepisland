@@ -297,7 +297,7 @@ console.log('\n=== P6: 体积 —— DTO 不得把历史字段带回来 ===');
   const ratio = Buffer.byteLength(wire) / Buffer.byteLength(legacy);
   check('同内容下 DTO 体积 < 旧快照 75%（历史字段已剥离）', ratio < 0.75,
     (ratio * 100).toFixed(1) + '%');
-  console.log('     （本机 6 个真实会话实测 32.3%：8969B → 2897B，见 README 性能一节）');
+  console.log(`     合成夹具：${Buffer.byteLength(legacy)}B → ${Buffer.byteLength(wire)}B`);
 }
 
 console.log('\n=== P7: nextDelay —— 自适应轮询 ===');

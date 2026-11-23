@@ -197,9 +197,8 @@ console.log('\n=== T5: 真连 GitHub：版本解析 + 下载 + 校验 + 解压 =
       ver = await mod.resolveLatestVersion();
       check('Node 直连解析最新版本号（TLS 正常）', /^\d+\.\d+\.\d+/.test(ver), ver);
     } catch (e) {
-      // 作者本机的执行沙箱是 MITM 代理（HTTP(S)_PROXY → 127.0.0.1:60158），
-      // curl 信任它、Node 的 node:https 不信任 → UNABLE_TO_VERIFY_LEAF_SIGNATURE。
-      // 这是**沙箱产物，不是产品缺陷**：DSH 宿主里没有这层代理。
+      // 不同测试环境的出站代理与信任库可能不同，curl 和 Node 的结果不一定一致。
+      // 保留实际错误，再用 curl 区分网络环境与安装器逻辑。
       //
       // 绝不能为了让这条变绿去关 TLS 校验 —— 安装器要下载并**执行**二进制，
       // 关掉证书校验等于把「校验过再装」这个保证整个拆掉。
