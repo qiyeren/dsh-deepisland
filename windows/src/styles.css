@@ -116,9 +116,8 @@ html, body {
 .island[data-expanded="0"][data-live="0"] { width: calc-size(max-content, size); }
 .island[data-expanded="0"][data-live="0"] .island-clip { padding-inline: 0; }
 .island[data-expanded="0"][data-live="0"] .compact { padding-inline: 8px; justify-content: center; gap: 0; }
-.island[data-expanded="0"][data-live="0"] .title { container-type: normal; flex: 0 0 auto; }
+.island[data-expanded="0"][data-live="0"] .title { flex: 0 0 auto; }
 .island[data-live="0"] :is(#c-dot, #c-chip) { display: none; }
-.island[data-expanded="0"][data-live="0"] .title-text { animation: none; }
 
 /* The child was ~300px under the old 316px strip and 330px under the HUD.
    Preserve those independent targets even when only a four-character label is above it. */
@@ -363,19 +362,6 @@ html, body {
   text-overflow: ellipsis;
   flex: 1 1 auto;
   min-width: 0;
-  container-type: inline-size;
-}
-
-/* Short titles stay static. Only a visible title with measured overflow scrolls. */
-.title-text { display: block; width: max-content; white-space: nowrap; }
-.island[data-mode="compact"] .title.overflows .title-text { animation: compact-title-scroll 9s ease-in-out infinite; }
-@keyframes compact-title-scroll {
-  0%, 15% { transform: translateX(0); }
-  75%, 90% { transform: translateX(min(0px, calc(100cqw - 100%))); }
-  100% { transform: translateX(0); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .title-text { animation: none; }
 }
 
 /* 胶囊徽标（Mac Capsule 白 10%~14% 底），等宽小字 */

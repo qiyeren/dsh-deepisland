@@ -621,19 +621,6 @@
       }
     });
     ro.observe(body);
-
-    // CSS cannot test text overflow directly. Only animate a long, visible title.
-    const title = $('c-title'), text = $('c-title-text');
-    let available = 0, natural = 0;
-    const titleSize = new ResizeObserver(changes => {
-      for (const change of changes) {
-        if (change.target === title) available = change.contentRect.width;
-        else natural = change.contentRect.width;
-      }
-      setClass(title, 'overflows', available > 0 && natural > available + 1);
-    });
-    titleSize.observe(title);
-    titleSize.observe(text);
   }
 
   /* ───────────────────────────── 指针命中与穿透 ───────────────────────────── */

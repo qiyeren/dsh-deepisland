@@ -537,7 +537,7 @@ console.log('\n=== S12: 动效与视觉口径（契约 §3/§6）===');
   check('键盘焦点环 outline（仅键盘焦点）',
     /\.row:focus-visible[\s\S]{0,220}?outline:\s*1px solid/.test(code.styles));
   check('胶囊底白 10%', /--chip:\s*rgba\(255,\s*255,\s*255,\s*0\.10\)/.test(code.styles));
-  check('无主岛扫光、心跳、无条件滚动等循环装饰', !/dot-breathe|dot-tool|dot-heartbeat|band-sheen|done-glint|glow-pulse/.test(code.styles) && /\.title\.overflows \.title-text/.test(code.styles));
+  check('无主岛扫光、心跳、标题滚动等循环装饰', !/dot-breathe|dot-tool|dot-heartbeat|band-sheen|done-glint|glow-pulse|compact-title-scroll/.test(code.styles));
   check('循环动画受 data-glow="0" 关闭（关掉光效不剩闪烁）',
     (code.styles.match(/\[data-glow="0"\]/g) || []).length >= 2);
   check('reduced-motion 下循环动画全关（animation:none，而不是缩短）',

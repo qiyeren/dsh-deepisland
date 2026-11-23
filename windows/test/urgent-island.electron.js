@@ -69,9 +69,17 @@ app.whenReady().then(async () => {
   win.webContents.send('island:cursor', {x:child.childX, y:child.childY, inside:true}); await wait();
   if (interactive.at(-1) !== true) throw new Error('Urgent close at the overhanging end must accept pointer');
   win.webContents.send('island:cursor', {inside:false}); await wait();
-  send('long-title', [{ id: 'long', label: '这是一个很长的合成会话标题用于验证收起状态的文字滚动效果和无障碍显示', status: 'running' }], []); await wait();
-  const scrolling = await win.webContents.executeJavaScript("(() => { const title = document.querySelector('#c-title'); const text = document.querySelector('#c-title-text'); const animation = text?.getAnimations()[0]; if (animation) { animation.pause(); animation.currentTime = 7200; } return { label: text?.textContent, name: text && getComputedStyle(text).animationName, x: text ? new DOMMatrixReadOnly(getComputedStyle(text).transform).m41 : 0, titleWidth: title.getBoundingClientRect().width, textWidth: text?.getBoundingClientRect().width }; })()");
-  if (!scrolling.label || scrolling.name !== 'compact-title-scroll' || scrolling.x >= -1) throw new Error('Overflowing compact title should scroll: ' + JSON.stringify(scrolling));
+  const longTitle = '这是一个很长的合成会话标题用于验证收起时静态省略并始终保留右侧状态';
+  send('long-title', [{ id: 'long', label: longTitle, status: 'running' }], []); await wait();
+  const overflow = await win.webContents.executeJavaScript(`(() => {
+    const title = document.querySelector('#c-title'), chip = document.querySelector('#c-chip');
+    const style = getComputedStyle(title), t = title.getBoundingClientRect(), c = chip.getBoundingClientRect();
+    const row = document.querySelector('#compact').getBoundingClientRect();
+    return { full: title.title, clipped: title.scrollWidth > title.clientWidth && style.overflowX === 'hidden' && style.textOverflow === 'ellipsis',
+      animations: title.getAnimations({ subtree: true }).length, status: chip.innerText,
+      statusFits: c.width > 0 && c.left >= t.right - 0.5 && c.right <= row.right + 0.5 && chip.scrollWidth <= chip.clientWidth + 1 };
+  })()`);
+  if (overflow.full !== longTitle || !overflow.clipped || overflow.animations || overflow.status !== '运行中' || !overflow.statusFits) throw new Error('Long compact title must ellipsize without scrolling or displacing status: ' + JSON.stringify(overflow));
   send('status-test-again', [{ id: 'status-a', label: '会话标题一', status: 'running', actionText: '深度思考中', tag: 'Thinking' }, { id: 'status-b', label: '会话标题二', status: 'running', actionText: '执行中', tag: 'Executing Tool' }], []); await wait();
   await win.webContents.executeJavaScript("document.querySelector('#compact').click()"); await wait();
   const row = await win.webContents.executeJavaScript(`(() => { const e = document.querySelector('#list .row'); return { action: e?.querySelector('.action')?.textContent, tag: e?.querySelector('.tag')?.textContent, label: e?.querySelector('.label')?.textContent }; })()`);
