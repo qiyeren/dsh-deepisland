@@ -219,7 +219,7 @@ console.log('\n=== S6: 插件的 Windows 自动安装分支仍然在 ===');
 {
   const lib = fs.readFileSync(path.join(__dirname, '..', '..', 'lib', 'index.js'), 'utf8');
   check("win32 走 ensureWindowsAppInstalled", /platform === 'win32'[\s\S]{0,200}ensureWindowsAppInstalled/.test(lib));
-  check('资产名按平台分叉', /DSHNotch-' \+ ver \+ '-win-/.test(lib), '资产名没分叉');
+  check('Windows 配对验证失败不启动', /if \(!paired\)\s*\{[\s\S]{0,220}'pair-mismatch'[\s\S]{0,100}continue;/.test(lib));
   check('darwin 分支没被改动', /if \(platform !== 'darwin'\)[\s\S]{0,120}未支持的平台/.test(lib));
 }
 
@@ -246,8 +246,7 @@ console.log('\n=== S7: 快照字段必须容缺（否则首帧白屏）===');
     /typeof c\.scale === 'number' \? c\.scale[\s\S]{0,80}: 1/.test(configFn));
   check('旧快照的 config.raw 仍然兼容（raw 兜底）',
     /const raw = \(c\.raw && typeof c\.raw === 'object'\) \? c\.raw : \{\}/.test(configFn));
-  check('bridge 也走兜底（(state.snap && state.snap.bridge) || {}）',
-    /\(state\.snap && state\.snap\.bridge\) \|\| \{\}/.test(code.renderer));
+  check('缺少桥状态也能显示首帧', code.renderer.includes('state.snap?.bridge?.statesOnline === false'));
   check('第一行快照前先 render() 空态，避免白屏',
     /render\(\);\s*\/\/ 首帧先给/.test(raw.renderer) && /window\.island\.onSnapshot\(onSnapshot\)/.test(raw.renderer));
 }
@@ -262,8 +261,7 @@ console.log('\n=== S8: 窗口架构契约（固定最大窗口 + 穿透 + 顶端
 //   renderer.js 只改岛体尺寸（data-mode + --island-h），不碰窗口
 {
   check('main.js 定义固定窗口尺寸 MAX_WINDOW', /const MAX_WINDOW = \{ w: \d+, h: \d+ \}/.test(code.main));
-  check('窗口 y 与工作区顶端重合（顶边方角落在屏幕边界上）',
-    /const y = area\.y;/.test(code.main), '应是 area.y，不留顶部 bleed');
+  check('优先恢复已保存 y，无记录才靠工作区顶端', /const y = restored \? restored\.y : area\.y;/.test(code.main));
   check('窗口摆放只读 MAX_WINDOW（不跟岛体尺寸跑）',
     /const ww = Math\.round\(MAX_WINDOW\.w \* scale\);/.test(code.main)
       && /const hh = Math\.round\(MAX_WINDOW\.h \* scale\);/.test(code.main));
@@ -286,8 +284,8 @@ console.log('\n=== S8: 窗口架构契约（固定最大窗口 + 穿透 + 顶端
     !/class="neck"/.test(raw.html));
 
   // 形状：顶平 + 底圆角。对齐 swift/UI/NotchShape.swift 的结论。
-  check('岛本体只有底部圆角（顶部方角贴屏幕顶边）',
-    /border-radius:\s*0 0 var\(--r-collapsed\)/.test(code.styles),
+  check('收起态是窄胶囊，展开态只保留底部圆角',
+    /border-radius:\s*var\(--r-collapsed\)/.test(code.styles) && /border-radius:\s*0 0 var\(--r-expanded\)/.test(code.styles),
     (code.styles.match(/border-radius:[^;]*/) || [''])[0]);
 
   check('render() 写 data-mode（compact/hud 是 v2 的主驱动）',
@@ -300,8 +298,8 @@ console.log('\n=== S8: 窗口架构契约（固定最大窗口 + 穿透 + 顶端
     /--spring-ms:\s*340ms/.test(code.styles), 'Swift 侧是 0.34s');
   check('圆角口径与 Mac 一致（折叠 12 / 展开 20）',
     /--r-collapsed:\s*12px/.test(code.styles) && /--r-expanded:\s*20px/.test(code.styles));
-  check('宽度由 --island-w 驱动、展开态覆盖为 436',
-    /width:\s*var\(--island-w\)/.test(code.styles) && /--island-w-expanded:\s*436px/.test(code.styles));
+  check('宽度由 --island-w 驱动、展开态覆盖为 350',
+    /width:\s*var\(--island-w\)/.test(code.styles) && /--island-w-expanded:\s*350px/.test(code.styles));
   check('高度由 --island-h 驱动（不再 height:auto 做过场）',
     /height:\s*var\(--island-h\)/.test(code.styles) && /--island-h:\s*auto/.test(code.styles));
   check('宽/高/圆角共用同一条弹簧（一起动才读作「张开」）',
@@ -321,12 +319,7 @@ console.log('\n=== S9: 桥的 pending 必须一路透传到界面 ===');
   check('托盘菜单显示待处理条数', /条待处理/.test(code.main));
   check('快照 bridge DTO 带 pending（snapshot.js 负责）',
     /pending: count\(o\.pending\)/.test(raw.snapshot));
-  check('岛页脚在有待处理时给出提示（renderFooter 拼「待处理 N」）',
-    /' · 待处理 ' \+ pending/.test(code.renderer));
-  check('.pending 用告警色（区别于绿色的正常态）',
-    /\.pending\s*\{[^}]*color:\s*#FFAA00/.test(code.styles));
-  check('bridge-dot 有 on 状态（桥正常 vs 未连上可区分）',
-    /\.bridge-dot\.on\s*\{[^}]*background/.test(code.styles));
+  check('连接队列诊断不占用会话列表', !/id="(?:bridge-dot|bridge-text)"/.test(raw.html));
 }
 
 console.log('\n=== S10: 交互与动效契约（Mac 对齐口径 + v2 三道防线）===');
@@ -378,14 +371,12 @@ console.log('\n=== S10: 交互与动效契约（Mac 对齐口径 + v2 三道防�
   check('尺寸过渡结束（width/height）后复算命中',
     /addEventListener\('transitionend'/.test(code.renderer)
       && /ev\.propertyName !== 'width' && ev\.propertyName !== 'height'/.test(code.renderer));
-  check('1s 兜底复算（转发事件丢失时不卡在旧状态）',
-    /SAFETY_RECHECK_MS = 1000/.test(code.renderer));
+  check('渲染层不再靠常驻秒表复算指针', !code.renderer.includes('setInterval('));
   check('mouseleave 复位悬停态',
     /document\.addEventListener\('mouseleave', onPointerLeave\)/.test(code.renderer));
   check('onPointerLeave 必须真的通知主进程收回穿透（否则透明区吞点击）',
     /function onPointerLeave[\s\S]{0,900}setInteractive\(false\)/.test(fnBody(code.renderer, 'onPointerLeave')));
-  check('出岛分支立刻交还穿透（setInteractive(false)）',
-    /state\.overIsland = over;[\s\S]{0,1600}setInteractive\(false\)/.test(fnBody(code.renderer, 'evaluatePointer')));
+  check('指针不在主岛和子岛时立即交还穿透', /setInteractive\(over \|\| overChild\)/.test(fnBody(code.renderer, 'evaluatePointer')));
 
   check('键盘 Esc 取消钉住', /ev\.key === 'Escape'/.test(code.renderer) && /state\.pinned = false/.test(code.renderer));
   check('HUD 展开时 ↑/↓ 移动行焦点',
@@ -405,14 +396,13 @@ console.log('\n=== S10: 交互与动效契约（Mac 对齐口径 + v2 三道防�
     /sendToRenderer\('island:pin-toggle'\)/.test(code.main)
       && /window\.island\.onPinToggle\(togglePin\)/.test(code.renderer));
 
-  check('点详情/统计 = 跳主会话', /target\.closest\('#detail'\)/.test(code.renderer)
-    && /target\.closest\('#stats'\)/.test(code.renderer) && /jumpPrimary\(\)/.test(code.renderer));
+  check('无废弃的详情或统计跳转区', !/id="(?:detail|stats)"/.test(raw.html));
   check('点行 = 跳对应会话（事件委托，行复用不重绑）',
     /ev\.target\.closest\('\.row'\)/.test(code.renderer) && /state\.entries\.find/.test(code.renderer));
   check('点折叠主行 = 钉住 / 取消', /addEventListener\('click', \(\) => togglePin\(\)\)/.test(code.renderer));
 
-  check('内发光带口径与 Mac 一致（34 / 48，34% → 0）',
-    /--band-collapsed:\s*34px/.test(code.styles) && /--band-expanded:\s*48px/.test(code.styles)
+  check('内发光带跟随胶囊高度（14 / 48，34% → 0）',
+    /--band-collapsed:\s*14px/.test(code.styles) && /--band-expanded:\s*48px/.test(code.styles)
       && /color-mix\(in srgb, var\(--glow\) 34%, transparent\)/.test(code.styles));
   check('外发光沿剪影、跟活跃状态走（data-live）',
     /\[data-live="1"\]/.test(code.styles) && /box-shadow/.test(code.styles));
@@ -435,9 +425,9 @@ console.log('\n=== S10: 交互与动效契约（Mac 对齐口径 + v2 三道防�
 console.log('\n=== S11: 性能不变量（契约 §7）===');
 // 这些断言全部是「回归即隐形」的那一类：违反了不报错，只是岛悄悄变卡。
 {
-  const hotFns = ['render', 'renderCompact', 'renderHud', 'renderRows', 'renderStats', 'tickClock', 'onSnapshot'];
+  const hotFns = ['render', 'renderCompact', 'renderRows', 'renderNudges', 'renderUrgentIsland', 'onSnapshot'];
   const bodies = hotFns.map((n) => fnBody(code.renderer, n));
-  check('找齐了热路径函数（7 个）', bodies.every((b) => b.length > 40),
+  check('找齐了快照与显示热路径函数', bodies.every((b) => b.length > 40),
     hotFns.filter((n, i) => bodies[i].length <= 40).join(','));
 
   const hot = bodies.join('\n');
@@ -445,9 +435,9 @@ console.log('\n=== S11: 性能不变量（契约 §7）===');
     check('热路径没有 ' + banned, !hot.includes(banned));
   }
 
-  // 整个 renderer 里只允许 islandRect() 一处同步读布局（命中判定，脏标记 + rAF + 1s 兜底）
+  // 只在主岛/子岛的指针命中测试时读取几何。
   const layoutReads = (code.renderer.match(/getBoundingClientRect\(/g) || []).length;
-  check('全渲染层只有 1 处 getBoundingClientRect（islandRect）', layoutReads === 1, '共 ' + layoutReads + ' 处');
+  check('全渲染层只有主岛/子岛命中判定读取矩形', layoutReads === 2 && fnBody(code.renderer, 'evaluatePointer').includes('child.getBoundingClientRect('), '共 ' + layoutReads + ' 处');
   check('这一处在 islandRect() 里',
     /function islandRect[\s\S]{0,300}getBoundingClientRect/.test(fnBody(code.renderer, 'islandRect')));
   check('没有 innerHTML 赋值（骨架一次创建，之后只改文本/属性）',
@@ -457,10 +447,7 @@ console.log('\n=== S11: 性能不变量（契约 §7）===');
     /state\.rows\.get\(entry\.id\)/.test(code.renderer)
       && /function createRow/.test(code.renderer)
       && /host\.insertBefore\(row\.node/.test(code.renderer));
-  check('统计行是固定槽位（STAT_DEFS 6 个，不重建）',
-    /const STAT_DEFS = \[/.test(code.renderer)
-      && (code.renderer.match(/\['[a-z]+', '/g) || []).length === 6
-      && /function createStat/.test(code.renderer));
+  check('主岛没有隐藏的计量器和秒表', !/STAT_DEFS|scheduleClock|elapsedFrom|contextFraction|turnStepText|toolCountText/.test(code.renderer));
   check('写 DOM 前先比较旧值（同值不写）',
     /if \(node\.textContent !== v\) node\.textContent = v;/.test(code.renderer)
       && /if \(node\.style\.getPropertyValue\(prop\) === value\) return;/.test(code.renderer)
@@ -475,11 +462,8 @@ console.log('\n=== S11: 性能不变量（契约 §7）===');
   check('rev 在 render 成功之后才记录（render 抛错可重试）',
     /render\(\);[\s\S]{0,260}state\.rev = snap\.rev;/.test(fnBody(code.renderer, 'onSnapshot')));
 
-  check('主进程改用递归 setTimeout + nextDelay 自适应 250/1000ms',
-    /setTimeout\(tick, nextDelay\(payload && payload\.entries, hidden\)\)/.test(code.main)
-      && !/setInterval\(tick/.test(code.main));
-  check('nextDelay 的落点在 snapshot.js（可被纯 Node 单测）',
-    /const \{ buildSnapshot, nextDelay \} = require\('\.\/snapshot\.js'\)/.test(code.main));
+  check('周期维护与活跃会话数量无关', /setTimeout\(tick, Math\.max\(20, BRIDGE_PROBE_MS/.test(code.main) && !/nextDelay\(/.test(code.main));
+  check('状态变化来自宿主而非磁盘监控器', /stateFeed = followStates\(/.test(code.main) && !/new SessionMonitor\(/.test(code.main));
   check('主进程已无固定 250ms 轮询常量', !/TICK_MS = 250/.test(code.main));
 
   // 每拍只 load 一次配置；桥探测按时间而不是 tickIndex（间隔已不固定）
@@ -513,7 +497,7 @@ console.log('\n=== S11: 性能不变量（契约 §7）===');
   check('rendererLoaded 之前不推进 lastRev（避免首帧永久丢失）',
     /if \(rendererLoaded && payload\.rev !== lastRev\)/.test(code.main));
   check('takeSnapshot 的 DTO 由 buildSnapshot 统一产出',
-    /function takeSnapshot[\s\S]{0,900}buildSnapshot\(\{ entries, nudges: nudgeItems, config: cfg, bridge: bridgeState, jump: lastJump, now \}\)/.test(code.main));
+    /buildSnapshot\(\{ states: sessionStates, nudges: nudgeItems, config: cfg,\s+bridge: \{ \.\.\.bridgeState, statesOnline \}, jump: lastJump, now \}\)/.test(code.main));
 }
 
 console.log('\n=== S12: 动效与视觉口径（契约 §3/§6）===');
@@ -528,9 +512,7 @@ console.log('\n=== S12: 动效与视觉口径（契约 §3/§6）===');
   const overshoot = Math.max(...pairs.map((p) => Number(p.split(/\s+/)[0])));
   check('过冲约 1.5%（最大 1.0152）', Math.abs(overshoot - 1.0152) < 1e-9, String(overshoot));
 
-  check('--spring-ms 340ms 且 --snap 内容入场曲线单独定义',
-    /--spring-ms:\s*340ms/.test(code.styles) && /--snap:\s*cubic-bezier/.test(code.styles)
-      && /--snap-ms:\s*220ms/.test(code.styles));
+  check('只对模式形状与内容切换做过渡', /--spring-ms:\s*340ms/.test(code.styles) && /--mode-ms:\s*140ms/.test(code.styles));
   check('禁止 transition: all', !/transition\s*:[^;}]*\ball\b/.test(code.styles));
   check('禁止对 box-shadow / filter 做过渡',
     !/transition\s*:[^;}]*(box-shadow|filter)/i.test(code.styles));
@@ -542,7 +524,7 @@ console.log('\n=== S12: 动效与视觉口径（契约 §3/§6）===');
   check('数字等宽（tabular-nums）',
     /font-variant-numeric:\s*tabular-nums/.test(code.styles));
   check('发丝线白 8%', /--hairline:\s*rgba\(255,\s*255,\s*255,\s*0\.08\)/.test(code.styles));
-  check('详情正文色 rgb(166,214,255)', /--detail-ink:\s*rgb\(166,\s*214,\s*255\)/.test(code.styles));
+  check('主岛不绘制详情正文', !/class="detail/.test(raw.html));
   check('尺寸变化限制在岛内（.island-clip contain: layout paint）',
     /\.island-clip\s*\{[\s\S]{0,700}?contain:\s*layout paint/.test(code.styles)
       && (code.styles.match(/contain:\s*layout paint/g) || []).length >= 1);
@@ -550,39 +532,12 @@ console.log('\n=== S12: 动效与视觉口径（契约 §3/§6）===');
     /\.is-off\s*\{\s*display: none !important;/.test(code.styles)
       && /classList\.toggle\('is-off'/.test(code.renderer));
 
-  check('上下文压力条 2px + 两档告警色（>50% 琥珀 / >80% 红）',
-    /\.pressure\s*\{[\s\S]{0,300}?height: 2px/.test(code.styles)
-      && /\.pressure\[data-level="1"\]/.test(code.styles)
-      && /\.pressure\[data-level="2"\]/.test(code.styles));
-  check('压力条由 contextFraction 驱动（renderer 写 width %）',
-    /setCssVar\(\$\('pressure-fill'\), 'width', pct \+ '%'\)/.test(code.renderer));
+  check('没有上下文或待办进度条', !/id="(?:pressure|todo|c-gauge)"|role="progressbar"/.test(raw.html));
   check('行 hover 反馈白 13%', /\.row:hover\s*\{\s*background:\s*rgba\(255,\s*255,\s*255,\s*0\.13\)/.test(code.styles));
   check('键盘焦点环 outline（仅键盘焦点）',
     /\.row:focus-visible[\s\S]{0,220}?outline:\s*1px solid/.test(code.styles));
   check('胶囊底白 10%', /--chip:\s*rgba\(255,\s*255,\s*255,\s*0\.10\)/.test(code.styles));
-  check('图标用 CSS mask + 内联 SVG（零外链 / 零字体依赖）',
-    /mask-image:\s*var\(--ico\)/.test(code.styles) && /url\("data:image\/svg\+xml/.test(code.styles));
-
-  // 分层入场：hdr(0) → pressure(20) → detail(50) → todo(80) → list(110) → stats(140) → footer(170)
-  check('分层入场用 layer-in 关键帧（opacity + translateY 3px）',
-    /@keyframes layer-in[\s\S]{0,160}?translateY\(3px\)/.test(code.styles)
-      && /animation: layer-in var\(--snap-ms\) var\(--snap\) both/.test(code.styles));
-  const delays = [0, 20, 50, 80, 110, 140, 170];
-  check('入场延迟阶梯完整（0/20/50/80/110/140/170ms）',
-    delays.every((d) => new RegExp('animation-delay:\\s*' + d + 'ms').test(code.styles)));
-
-  // 状态动效（契约 §6.4 的定值），全部受 data-glow 门控
-  check('思考：状态点 2.4s 呼吸（scale 1→1.25）',
-    /animation: dot-breathe 2\.4s/.test(code.styles) && /scale\(1\.25\)/.test(code.styles));
-  check('工具：1.6s 弹性呼吸 + 内发光带 3s 流光',
-    /animation: dot-tool 1\.6s/.test(code.styles)
-      && /animation: band-sheen 3s linear infinite/.test(code.styles));
-  check('等待确认：1.2s 心跳 + 外发光脉冲 opacity 0.55→0.9',
-    /animation: dot-heartbeat 1\.2s/.test(code.styles)
-      && /animation: glow-pulse 1\.2s/.test(code.styles)
-      && /0%, 100% \{ opacity: 0\.55; \}/.test(code.styles));
-  check('完成：一次性绿色微光（done-glint 只跑一次）',
-    /animation: done-glint 1\.1s/.test(code.styles));
+  check('无主岛扫光、心跳、无条件滚动等循环装饰', !/dot-breathe|dot-tool|dot-heartbeat|band-sheen|done-glint|glow-pulse/.test(code.styles) && /\.title\.overflows \.title-text/.test(code.styles));
   check('循环动画受 data-glow="0" 关闭（关掉光效不剩闪烁）',
     (code.styles.match(/\[data-glow="0"\]/g) || []).length >= 2);
   check('reduced-motion 下循环动画全关（animation:none，而不是缩短）',
@@ -593,13 +548,9 @@ console.log('\n=== S12: 动效与视觉口径（契约 §3/§6）===');
     /setCssVar\(root, '--scale'/.test(code.renderer)
       && /setCssVar\(root, '--glow'/.test(code.renderer)
       && /setCssVar\(row\.dot, '--dot'/.test(code.renderer));
-  check('不同状态只改 --glow（renderer 是唯一写入方，CSS 不再定义第二份）',
-    /setCssVar\(root, '--glow', glow\)/.test(code.renderer)
-      && /状态色板由 renderer 写/.test(raw.styles)
-      && !/\.island\[data-status="[a-z]+"\]\s*\{[^}]*--glow:/.test(code.styles)
-      && /\.row\[data-status="waiting"\]\s*\{\s*--dot: #FFAA00/.test(code.styles));
+  check('主岛色取自主条目而不是提醒种类', code.renderer.includes('STATUS.get(state.primary?.status)?.color') && !/\.island\[data-status="[a-z]+"\]\s*\{[^}]*--glow:/.test(code.styles));
   check('--island-w / --island-h / --spring / --r-* / --band-* 变量齐全',
-    ['--island-w:', '--island-h:', '--spring:', '--spring-ms:', '--snap:', '--snap-ms:',
+    ['--island-w:', '--island-h:', '--spring:', '--spring-ms:', '--mode-ms:',
       '--r-collapsed:', '--r-expanded:', '--band-collapsed:', '--band-expanded:']
       .every((v) => code.styles.includes(v)));
 }

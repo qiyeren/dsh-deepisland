@@ -5,12 +5,12 @@ import Foundation
 /// DSH 的目录布局：
 /// ```
 /// ~/.dsh/sessions/<项目目录名>/<会话目录名>/session.v4.jsonl.zstd
-///     --Users-delinger-Desktop-office--   session-a59ae858-…
+///     --example-workspaces-docs--   session-22222222-…
 /// ```
 struct SessionFileInfo: Equatable {
-    /// 会话 id（= 会话目录名，如 `session-a59ae858-…`）。同时是投影缓存的查找键。
+    /// 会话 id（= 会话目录名，如 `session-22222222-…`）。同时是投影缓存的查找键。
     let id: String
-    /// 项目目录名（如 `--Users-delinger-Desktop-office--`）
+    /// 项目目录名（如 `--example-workspaces-docs--`）
     let project: String
     let url: URL
     let mtime: Date
@@ -107,7 +107,7 @@ final class SessionSource {
 
     /// 把 DSH 的项目目录名还原成人看得懂的名字（**兜底**用）。
     ///
-    /// `--Users-delinger-Desktop-deepisland--` → `deepisland`
+    /// `--example-workspaces-demo--` → `demo`
     /// 规则：去掉首尾的连字符（DSH 用 `--` 包裹路径），再把 `-` 当分隔符取最后一段。
     /// 首选仍然是投影缓存里 DSH 自己总结的会话标题（`Projections.title`）。
     static func prettyProject(_ raw: String) -> String? {

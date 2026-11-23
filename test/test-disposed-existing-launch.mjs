@@ -44,6 +44,7 @@ async function run(platform, scenario) {
       throw new Error('unexpected require: ' + name);
     } },
     '@deepseek-ai/schemastery': { default: schema },
+    './session-status.js': { SessionStates: class { attach() {} dispose() {} } },
     './nudge.js': { NudgeCenter: class { constructor() { this.config = {}; } dispose() {} }, attachNudges: () => { throw new Error('unexpected nudge setup'); } },
     './browser-api.js': { registerBrowserApi: () => { throw new Error('unexpected browser API'); } },
     './bridge-owner.js': { acquireBridgeOwner: () => { throw new Error('unexpected socket'); }, BRIDGE_OWNER_PORT: 47312 },

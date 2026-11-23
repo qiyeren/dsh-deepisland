@@ -23,6 +23,7 @@ const SUITES = [
   'jump.test.js',
   'jump-feedback-isolated.test.js',
   'snapshot.test.js',
+  'state-feed.test.js',
   'setup-entry.test.js',
   'nudge-ui.test.js',
 ];

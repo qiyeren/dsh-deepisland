@@ -1,6 +1,6 @@
 {
   "label": "baseline-8e2d8c2",
-  "src": "C:\\Users\\delinger\\AppData\\Local\\Temp\\deepisland-baseline-src",
+  "src": "example-workspaces/baseline-src",
   "version": 1,
   "git": null,
   "durationMs": 4000,
@@ -16,10 +16,10 @@
   },
   "measurement": {
     "showMode": "showInactive@opacity0.02",
-    "rendererPid": 11608
+    "rendererPid": null
   },
   "displayHz": 240,
-  "output": "D:\\workspace\\deepisland\\windows\\scripts\\perf-baseline.json",
+  "output": "windows/scripts/perf-baseline.json",
   "frames": {
     "count": 809,
     "p50": 4.2,

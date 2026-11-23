@@ -18,7 +18,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const expectedPaths = ['/api/dsh-vibe-island/config', '/api/dsh-vibe-island/next'];
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
-async function withFixture(run) {
+async function withFixture(run, fixturePlatform = 'linux') {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deepisland-apply-memory-'));
   const envKeys = ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'XDG_CONFIG_HOME'];
   const env = Object.fromEntries(envKeys.map(k => [k, process.env[k]]));
@@ -39,7 +39,7 @@ async function withFixture(run) {
   const deny = () => { throw new Error('offline test: external I/O forbidden'); };
   try {
     fs.mkdirSync(path.join(dir, 'lib'));
-    for (const name of ['index.js', 'nudge.js', 'browser-api.js', 'bridge-owner.js']) {
+    for (const name of ['index.js', 'nudge.js', 'browser-api.js', 'bridge-owner.js', 'session-status.js']) {
       fs.copyFileSync(path.join(root, 'lib', name), path.join(dir, 'lib', name));
     }
     fs.writeFileSync(path.join(dir, 'package.json'), '{"type":"module"}');
@@ -49,7 +49,7 @@ async function withFixture(run) {
     fs.writeFileSync(path.join(shim, 'index.js'), `const node = () => { const s = {}; for (const m of ['default','description','step','min','max','readonly']) s[m] = () => s; return s; };\nexport default { object: node, union: node, boolean: node, number: node, natural: node, string: node, const: node };\n`);
     for (const key of envKeys) process.env[key] = path.join(dir, key.toLowerCase());
     os.homedir = () => path.join(dir, 'home');
-    Object.defineProperty(process, 'platform', { ...platform, value: 'linux' });
+    Object.defineProperty(process, 'platform', { ...platform, value: fixturePlatform });
     http.request = () => {
       probes++;
       const req = new EventEmitter();
@@ -165,6 +165,35 @@ function context(withConnection = true) {
 }
 
 const config = { bridgeEnabled: true, bridgePort: 32177, autoInstallApp: false };
+
+test('Windows owner connects the live-event handler to a conditional native state read, with no real I/O', async () => {
+  const {parseStates} = (await import('../windows/src/state-feed.js')).default;
+  await withFixture(async ({module, servers}) => {
+    const ctx = context(); module.apply(ctx, config);
+    try {
+      const bridge = await ctx.vibeIsland.bridgeReady;
+      assert.ok(bridge); assert.equal(ctx.listeners.size, 2);
+      const server = servers.find(s => s.listening);
+      const read = (since, headers = {}) => new Promise(resolve => {
+        const req = Object.assign(new EventEmitter(), {method:'GET', url:'/session-states' + (since ? '?since=' + encodeURIComponent(since) : ''), headers:{host:'127.0.0.1:'+bridge.port, ...headers}});
+        const res = new EventEmitter(); res.writeHead = code => { res.status = code; };
+        res.end = text => resolve({status:res.status, data:JSON.parse(text)});
+        server.handler(req, res);
+      });
+      const first = await read(''); assert.equal(first.status, 200);
+      const initial = parseStates(first.data); assert.deepEqual(initial.items, []);
+      assert.equal((await read('', {origin:'https://example.invalid'})).status, 403);
+      const pending = read(initial.rev);
+      const s = {header:{id:'session-fixture',cwd:'X:/fixture'}};
+      for (const fn of ctx.listeners) fn(s, {type:'turn/start',seq:1, data:{}});
+      const active = parseStates((await pending).data); assert.notEqual(active.rev,initial.rev);
+      assert.deepEqual(active.items.map(e=>[e.id,e.status]), [['session-fixture','running']]);
+      for (const fn of ctx.listeners) fn(s, {type:'turn/end',seq:2,data:{reason:{kind:'aborted'}}});
+      assert.equal(parseStates((await read(active.rev)).data).items[0].status, 'interrupted');
+    } finally { module.dispose(ctx); await tick(); await tick(); }
+    assert.equal(ctx.listeners.size, 0);
+  }, 'win32');
+});
 
 test('apply ownership and authenticated browser route lifecycle, fully offline', async () => {
   await withFixture(async ({ module, servers, probes, initialExitListeners }) => {
@@ -417,7 +446,7 @@ test('late service, loss and rapid reappearance serialize routes and collectors'
     assert.equal(ctx.routes.size, 0);
     ctx.appear();
     assert.ok(await ctx.vibeIsland.bridgeReady);
-    assert.equal(ctx.listeners.size, 1);
+    assert.equal(ctx.listeners.size, 1, 'non-Windows owner needs only the reminder collector');
     const firstCenter = ctx.vibeIsland.nudges;
     for (const listener of ctx.listeners) listener({ header: { id: 'retained-session' } }, { type: 'turn/end', data: { reason: { kind: 'completed' } } });
     const reminderId = firstCenter.list()[0]?.id;
@@ -438,7 +467,7 @@ test('late service, loss and rapid reappearance serialize routes and collectors'
     assert.ok(await next);
     assert.equal(ctx.vibeIsland.nudges, firstCenter);
     assert.equal(ctx.vibeIsland.nudges.list()[0]?.id, reminderId, 'pending reminder survives connection churn');
-    assert.equal(ctx.listeners.size, 1);
+    assert.equal(ctx.listeners.size, 1, 'non-Windows owner needs only the reminder collector');
     assert.equal(ctx.routes.size, 2);
     assert.equal(servers.filter(s => s.listening).length, 1);
     assert.equal(settings, 1, 'connection churn never re-registers settings');

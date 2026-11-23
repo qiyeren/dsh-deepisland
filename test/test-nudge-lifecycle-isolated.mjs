@@ -46,7 +46,7 @@ test('turn end only recognizes known successful reasons, preserving failure hand
   emit({ kind: 'completed' });
   assert.equal(center.list()[0].kind, 'completed'); center.ackAll();
   emit({ kind: 'max-tokens' });
-  assert.equal(center.list()[0].detail, '输出被长度上限截断'); center.ackAll();
+  assert.equal(center.list().length, 0, 'a truncated turn is not a completion');
   emit({ kind: 'error', error: { message: 'test error' } });
   assert.equal(center.list()[0].kind, 'failed'); assert.equal(center.list()[0].detail, 'test error'); center.ackAll();
   emit({ kind: 'blocked' });

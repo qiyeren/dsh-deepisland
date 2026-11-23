@@ -160,7 +160,7 @@ setInterval(() => {}, 1 << 30);
   section('E4: 完整跳转链路（app 投桥 → 桥入队 → 客户端取走 → openSession）');
   {
     const { performJump } = require(path.join(APP, 'src', 'jump.js'));
-    const SID = 'session-e567c20e-078b-4605-8031-17f796426cff';
+    const SID = 'session-00000000-0000-4000-8000-000000000002';
     const TITLE = 'Project Initialization';
     const entry = { id: SID, label: TITLE };
 

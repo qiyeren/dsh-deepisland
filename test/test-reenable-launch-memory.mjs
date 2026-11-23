@@ -42,6 +42,7 @@ async function fixture({ paired = true, bridge = false } = {}) {
     'node:child_process': { default: { spawn: fakeSpawn } },
     'node:module': { createRequire: () => name => ({ 'node:fs': fakeFS, 'node:path': path, 'node:os': { homedir: () => 'V:\\fixture-home' }, 'node:tls': {} })[name] },
     '@deepseek-ai/schemastery': { default: schema },
+    './session-status.js': { SessionStates: class { attach() {} dispose() {} } },
     './nudge.js': { NudgeCenter: class { constructor() { this.config = {}; } dispose() {} }, attachNudges: () => ({ dispose() {} }) },
     './bridge-owner.js': { acquireBridgeOwner: async () => ({ lost, close: async () => {} }), BRIDGE_OWNER_PORT: 47312 },
   };

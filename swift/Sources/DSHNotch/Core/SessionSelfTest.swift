@@ -5,7 +5,7 @@ import Foundation
 ///
 /// 为什么单独一个：`--self-test-projections` 验的是**单个会话**的解析正确性，
 /// 而这次改动的核心恰恰是「同时监控多个对话」——那条路径原先一行测试都没有。
-/// 本机实测存在同一分钟更新的两个会话（office 目录下），所以「候选多于一个」
+/// 本机实测存在同一分钟更新的两个会话（同一项目目录下），所以「候选多于一个」
 /// 是真实场景，不是假设出来的。
 final class SessionSelfTest {
     private var passed = 0
@@ -359,8 +359,8 @@ final class SessionSelfTest {
         }
         check(descending, "候选按 mtime 倒序")
 
-        check(SessionSource.prettyProject("--Users-delinger-Desktop-deepisland--") == "deepisland",
-              "项目目录名可还原（--Users-delinger-Desktop-deepisland-- → deepisland）")
+        check(SessionSource.prettyProject("--example-workspaces-demo--") == "demo",
+              "项目目录名可还原（--example-workspaces-demo-- → demo）")
         check(SessionSource.prettyProject("--") == nil, "畸形项目名返回 nil 而不是空串")
 
         // 走完整 poll 路径（发现 → 解压 → 游标 → 投影 → 排序）

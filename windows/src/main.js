@@ -24,7 +24,7 @@
  * ## 几个不能省的选项
  *
  * - `backgroundThrottling: false` —— 窗口不可见/失焦时 Chromium 会把定时器
- *   降频到 1s 甚至暂停，250ms 的轮询直接失效（岛变成「半天不动」）。
+ *   降频甚至暂停；保留既有悬停与动画行为，会话取数不依赖渲染层定时器。
  * - `transparent: true` —— 岛是异形的，没有它就只能是个黑方块。
  * - `skipTaskbar: true` —— 它不是普通应用窗口，不该占任务栏位置。
  */
@@ -54,12 +54,12 @@ app.on('quit', (e, code) => trace('[trace] app quit code=' + code));
 process.on('exit', (code) => trace('[trace] process exit code=' + code));
 
 const config = require('./config.js');
-const { SessionMonitor } = require('./monitor.js');
+const { followStates } = require('./state-feed.js');
 const bridge = require('./bridge.js');
 const nudges = require('./nudges.js');
 const { performJump } = require('./jump.js');
 // 快照协议是纯函数模块（无 electron 依赖），可直接被 node 单测 —— 见 snapshot.js。
-const { buildSnapshot, nextDelay } = require('./snapshot.js');
+const { buildSnapshot } = require('./snapshot.js');
 const position = require('./position.js');
 // Separate from the shared settings file: configuration saves cannot erase it.
 const positionFile = path.join(config.appDataDir(), 'window-position.json');
@@ -126,8 +126,9 @@ const MAX_WINDOW = { w: 484, h: 500 };
 
 let win = null;
 let tray = null;
-let monitor = null;
-let tickIndex = 0;
+let stateFeed = null;
+let sessionStates = [];
+let statesOnline = false;
 let bridgeState = { ok: false, port: bridge.FALLBACK_PORT, plugin: null };
 let lastJump = null;       // { kind, brief, at }
 let requestedHidden = false;
@@ -310,8 +311,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
-      // ⚠️ 不能省：窗口失焦/被遮挡时 Chromium 会把定时器降频，
-      // 250ms 轮询会变成「半天不动」。
+      // 保留既有悬停、命中检测与动画的后台调度行为。
       backgroundThrottling: false,
     },
   });
@@ -354,8 +354,7 @@ function createWindow() {
       lastRev = lastPayload.rev;
       firstSnapshotSent = true;
       applyVisibility();
-      // 首拍往往发生在 load 之前，那一拍把下一拍排到了 1000ms（当时窗口不可见）；
-      // 现在窗口已可见，立刻重排一次，让它进入 250ms 档，而不是先定住一秒。
+      // 页面就绪后立即同步首帧期间收到的状态变化。
       poke();
     }
   });
@@ -374,7 +373,7 @@ function showWindow() {
   if (win.isVisible()) { win.focus(); return; }
   win.show();
   win.focus();
-  // 窗口从隐藏态恢复 → 光标轮询要恢复（悬停主驱动），轮询也要立刻回到 250ms 档。
+  // 窗口重新显示时恢复光标驱动，并立即同步显示状态。
   startCursorWatch();
   poke();
 }
@@ -756,8 +755,8 @@ function probeNudges(cfg) {
 function takeSnapshot(cfg, now) {
   // 回执到点就清掉：rev 去重下，「该消失了」没有别的东西会触发推送。
   if (lastJump && now - lastJump.at > JUMP_HOLD_MS) lastJump = null;
-  const entries = monitor ? monitor.poll(now, tickIndex) : [];
-  return buildSnapshot({ entries, nudges: nudgeItems, config: cfg, bridge: bridgeState, jump: lastJump, now });
+  return buildSnapshot({ states: sessionStates, nudges: nudgeItems, config: cfg,
+    bridge: { ...bridgeState, statesOnline }, jump: lastJump, now });
 }
 
 /** 当前 tick 函数（startLoop 里赋值）。poke() 用它把等待中的下一拍提前。 */
@@ -767,8 +766,7 @@ let tickFn = null;
  * 请求「尽快再跑一拍」。
  *
  * 用在哪：跳转回执刚产生、窗口刚从托盘重新显示出来。这两件事都必须立刻反映
- * 到岛上，而自适应轮询在空闲/隐藏时可能正睡 1000ms —— 等它自然醒，点击反馈
- * 会慢到像没反应。这里只清掉当前等待并立刻重排，**不新增定时器**。
+ * 到岛上，不必等下一次桥维护。状态流也复用这个入口，合并同拍更新。
  */
 function poke() {
   if (!tickFn) return;
@@ -780,17 +778,17 @@ function poke() {
 }
 
 function startLoop() {
-  monitor = new SessionMonitor();
+  stateFeed = followStates((rows, online) => {
+    sessionStates = rows;
+    statesOnline = online;
+    poke(); // Includes recovery/clear. A repeated heartbeat does not wake the UI.
+  });
 
-  /**
-   * 递归 setTimeout 而不是 setInterval：下一拍等多久由 nextDelay 决定
-   * （有活跃会话 250ms / 全空闲或窗口隐藏 1000ms）。固定间隔的 setInterval
-   * 做不到这件事，而「再加一个高频定时器」是契约 §7 明令禁止的。
-   */
+  // Only config, reminder and bridge maintenance is periodic. The five phases
+  // arrive independently, including while hidden. Never fall back to disk.
   const tick = () => {
     loopTimer = null;
     if (quitting) return;
-    tickIndex += 1;
 
     // 每拍只 load 一次配置：下面判显隐、判 scale、给快照用的是同一份。
     const cfg = config.load();
@@ -827,8 +825,7 @@ function startLoop() {
       placeWindow();
     }
 
-    // 每 2s 探一次桥。按**时间**算而不是 tickIndex % 8：轮询间隔已经会在
-    // 250/1000ms 之间变，按下标算会让空闲时变成 8s 才探一次。
+    // 每 2s 探桥，状态变化引起的 tick 不得缩短该间隔。
     if (now - lastBridgeProbeAt >= BRIDGE_PROBE_MS) {
       lastBridgeProbeAt = now;
       // 提醒与桥健康探测**共用这一个 2s 闸门**（契约 §7 明令禁止新增常驻
@@ -843,14 +840,13 @@ function startLoop() {
           || r.port !== bridgeState.port
           || (r.pending || 0) !== (bridgeState.pending || 0);
         bridgeState = r;
-        if (changed) refreshTrayMenu();
+        if (changed && !quitting) { refreshTrayMenu(); poke(); }
       }).catch(() => { /* 探桥失败就当没桥 */ });
     }
 
-    // 自适应下一拍。注意 hidden 要在 applyVisibility 之后算 —— 这一拍刚把
-    // 窗口显示出来的话，下一拍应该回到 250ms 而不是继续睡 1000ms。
-    const hidden = !win || win.isDestroyed() || !win.isVisible();
-    loopTimer = setTimeout(tick, nextDelay(payload && payload.entries, hidden));
+    // Keep maintenance on its own deadline: status bursts must neither starve
+    // nor multiply reminder/health probes.
+    loopTimer = setTimeout(tick, Math.max(20, BRIDGE_PROBE_MS - (Date.now() - lastBridgeProbeAt)));
   };
 
   tickFn = tick;
@@ -1129,7 +1125,7 @@ ipcMain.handle('island:hide', () => {
 ipcMain.handle('island:show', () => {
   requestedHidden = false;
   applyVisibility();
-  poke();     // 立刻回到 250ms 档（隐藏期间轮询是 1000ms）
+  poke();     // 立即投递当前快照
   return true;
 });
 
@@ -1303,6 +1299,7 @@ app.on('before-quit', () => {
   // 500ms 看门狗也是常驻的 —— 不清的话进程会被多吊一拍，且 tick 可能
   // 在渲染帧销毁后再 send（虽然 sendToRenderer 已挡，但能少一条日志）。
   quitting = true;
+  stateFeed?.stop();
   if (loopTimer) { clearTimeout(loopTimer); loopTimer = null; }
   if (watchdogTimer) { clearInterval(watchdogTimer); watchdogTimer = null; }
   stopCursorWatch();

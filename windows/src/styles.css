@@ -1,42 +1,4 @@
-/* DSHNotch（Windows）—— 岛的样式 v2。
- *
- * 设计口径逐条对照 swift/UI/NotchContentView.swift 移植，两端看起来
- * 是同一个东西：
- *   - 底色纯黑（Mac 是 Color.black，不是深灰渐变）
- *   - 「光效」= 顶部一条状态色内发光带（34% → 0，折叠 34px / 展开 48px）
- *     + 沿形状剪影的一圈外发光（55%，blur 14，y 3）
- *   - 圆角 12（折叠）→ 20（展开）；顶平（方角落在屏幕边界上）；状态点 6px
- *   - 数字全部等宽（tabular-nums）；发丝线白 8%；详情正文 rgb(166,214,255)
- *
- * ## v2 相对 v1 改了什么（全部是「为什么」，别只看现象）
- *
- * 1) 真弹簧。v1 的 cubic-bezier 是手调近似，过冲形状和 SwiftUI
- *    `.spring(response:0.34, dampingFraction:0.8)` 对不上 —— 展开时「先冲
- *    过头再回来」的幅度不对，读起来像 ease。v2 用按该弹簧解析式采样出的
- *    61 点 `linear()`，宽度/高度/圆角共用同一条，与 Mac 端逐帧同形。
- *
- * 2) 发光换层。软件渲染下（main.js 关 hardware acceleration）对
- *    `box-shadow` 做过渡 = 340ms 里每帧重绘一大片模糊，帧率直接塌。
- *    v2 的外发光是独立伪元素 `.island::after`，阴影只栅格化一次，
- *    状态切换只动它的 opacity（可被合成器接管）。所以本文件里
- *    任何地方都不允许出现 `box-shadow` / `filter` 的 transition。
- *
- * 3) 高度外置。高度不再由内容 `height:auto` 撑着过场（那没法做弹簧），
- *    改由 renderer 用 ResizeObserver 把内容自然高度写进 `--island-h`，
- *    CSS 只负责把它过渡过去。`.island-body` 因此没有 padding ——
- *    量到的 content-box 高度就是岛高，少一处「+padding」的对不齐。
- *
- * 4) 分层入场 + 状态动效。见 §入场、§状态动效。全部纯 transform/opacity，
- *    不做过滤模糊；循环动画一律受 `data-glow` 与 `prefers-reduced-motion`
- *    双重门控。
- *
- * ## 架构（丝滑的来源，与 v1 同）
- *
- * 窗口按最大展开态一次开好（main.js MAX_WINDOW），本体顶对齐、水平居中
- * 钉在窗口里 —— 展开收起只是 .island 自己改宽改高，窗口不动，动画不被
- * DWM 的窗口尺寸变化拖累。macOS 版（NotchPanel「窗口按展开态取最大」）同款。
- */
-
+/* Windows session island. The fixed window contains a scaling, resizing island. */
 :root {
   --scale: 1;
 
@@ -47,8 +9,8 @@
   --dot: var(--glow);
 
   /* 折叠宽。展开态由 [data-expanded="1"] 覆盖（契约 §3） */
-  --island-w: 316px;
-  --island-w-expanded: 436px;
+  --island-w: 211px;
+  --island-w-expanded: 350px;
   /* 岛高：renderer 用 ResizeObserver 写 px。auto 只是首帧/旧渲染层兜底 */
   --island-h: auto;
 
@@ -57,10 +19,6 @@
   --spring: linear(0 0%, 0.0052 1.67%, 0.0196 3.33%, 0.0417 5%, 0.07 6.67%, 0.1034 8.33%, 0.1406 10%, 0.1808 11.67%, 0.2231 13.33%, 0.2666 15%, 0.3109 16.67%, 0.3552 18.33%, 0.3993 20%, 0.4425 21.67%, 0.4848 23.33%, 0.5257 25%, 0.5651 26.67%, 0.6028 28.33%, 0.6387 30%, 0.6727 31.67%, 0.7048 33.33%, 0.7348 35%, 0.763 36.67%, 0.7891 38.33%, 0.8134 40%, 0.8358 41.67%, 0.8564 43.33%, 0.8753 45%, 0.8925 46.67%, 0.9082 48.33%, 0.9223 50%, 0.9351 51.67%, 0.9465 53.33%, 0.9567 55%, 0.9658 56.67%, 0.9738 58.33%, 0.9809 60%, 0.987 61.67%, 0.9924 63.33%, 0.997 65%, 1.0009 66.67%, 1.0042 68.33%, 1.0069 70%, 1.0092 71.67%, 1.011 73.33%, 1.0124 75%, 1.0135 76.67%, 1.0143 78.33%, 1.0148 80%, 1.0151 81.67%, 1.0152 83.33%, 1.0151 85%, 1.0149 86.67%, 1.0145 88.33%, 1.0141 90%, 1.0136 91.67%, 1.013 93.33%, 1.0124 95%, 1.0118 96.67%, 1.0111 98.33%, 1 100%);
   --spring-ms: 340ms;   /* 必须与 Swift 的 response 0.34 对齐 */
 
-  /* 内容入场曲线：比弹簧利落，用完即走（≈220ms，不是形变） */
-  --snap: cubic-bezier(0.2, 0.9, 0.25, 1);
-  --snap-ms: 220ms;
-
   /* compact ⇄ hud 交叉淡化时长。比弹簧短得多：形变（宽/高/圆角）才是
      主角，内容只是「换人」，140ms 内交接完，弹簧还在跑的时候新内容
      已经站稳了。 */
@@ -68,7 +26,7 @@
 
   --r-collapsed: 12px;
   --r-expanded: 20px;
-  /* 内发光带高度：折叠 34 / 展开 48（Mac glowBandHeight 同值） */
+  /* 内发光带高度：折叠态与 14px 胶囊等高，展开态 48px。 */
   --band-collapsed: 14px;
   --band-expanded: 48px;
 
@@ -80,108 +38,11 @@
   --text-ghost: rgba(255, 255, 255, 0.28);
   --hairline: rgba(255, 255, 255, 0.08);
   --chip: rgba(255, 255, 255, 0.10);
-  /* 详情正文块的颜色（Mac: rgb(0.65,0.84,1.0)） */
-  --detail-ink: rgb(166, 214, 255);
-
-  /* 提醒（融合自 dsh-nudge）的三档颜色。
-   *
-   * **每档只定义这一次**：徽标、行色条、顶部发丝线都从这里取。散着写十六
-   * 进制必然会在某次改动里分叉，而症状只是「徽标和色条不是一个颜色」——
-   * 不报错，只能靠截图看出来。
-   *
-   * 与状态色（--glow 那一套）刻意分开：状态色说的是「这个会话在干什么」，
-   * 提醒色说的是「有件事等你处理」。needs_choice 与 waiting 同属琥珀系，
-   * 但前者是事件、后者是状态 —— 语义不同就不该共用一个变量。 */
+  /* 独立提醒的颜色不覆盖会话状态色。 */
   --nudge-choice: #F5A623;
   --nudge-failed: #E74C3C;
   --nudge-done: #4ADE80;
 }
-
-/* ───────────────── 图标：CSS mask + 内联 SVG ─────────────────
- *
- * 为什么不用 emoji/图标字体：emoji 的字形、基线、颜色全由系统字体决定，
- * 同一台机器上 Segoe UI Emoji 与 Mac 的 SF Symbols 完全是两种东西；
- * 图标字体则要外链文件（零依赖红线）。用 mask 把内联 SVG 当模板，
- * currentColor 着色，字号变了图标跟着变，且不占网络、不依赖字体。
- * 反例：直接 <img> 内联 SVG 没法跟着文字颜色走；background-image 没法
- * 用 currentColor 上色 —— mask 是唯一同时满足「着色 + 缩放 + 零依赖」的。
- */
-:root {
-  --ico-agents: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='5.1' cy='4.9' r='2.7' fill='%23fff'/%3E%3Cpath d='M.8 13.5c0-2.6 1.9-4.2 4.3-4.2s4.3 1.6 4.3 4.2v.6H.8z' fill='%23fff'/%3E%3Ccircle cx='11.6' cy='5.7' r='2.1' fill='%23fff' opacity='.72'/%3E%3Cpath d='M9.9 13.5c0-2 1.3-3.3 3-3.3s3.1 1.3 3.1 3.3v.6H9.9z' fill='%23fff' opacity='.72'/%3E%3C/svg%3E");
-  --ico-sessions: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='1' y='1.5' width='10.5' height='8.5' rx='2' fill='%23fff' opacity='.5'/%3E%3Crect x='3.2' y='3.6' width='11.3' height='9.2' rx='2' fill='%23fff' opacity='.75'/%3E%3Crect x='4.4' y='5.7' width='11.3' height='9.2' rx='2' fill='%23fff'/%3E%3C/svg%3E");
-  --ico-tool: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M11.2 1.2a4.4 4.4 0 0 0-4.3 5.6L1.2 12.5l2.3 2.3 5.7-5.7a4.4 4.4 0 0 0 5.6-4.3l-2.5 2.5-2.4-.7-.7-2.4z' fill='%23fff'/%3E%3C/svg%3E");
-  --ico-todo: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1.3 4.9l1.4 1.4 2.8-2.8 1.2 1.2-4 4L.1 6.1z' fill='%23fff'/%3E%3Crect x='8' y='3.7' width='7' height='1.7' rx='.85' fill='%23fff'/%3E%3Cpath d='M1.3 10.6l1.4 1.4 2.8-2.8 1.2 1.2-4 4L.1 11.8z' fill='%23fff'/%3E%3Crect x='8' y='9.4' width='7' height='1.7' rx='.85' fill='%23fff'/%3E%3C/svg%3E");
-  /* 上下文仪表：开环 + 指针（Mac 没有对应 SF Symbol，用「仪表」这个
-     通用语义；比塞一个数字图标更易读） */
-  --ico-ctx: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M13.6 8a5.6 5.6 0 1 1-2.2-4.5' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round'/%3E%3Cpath d='M8 8l3.4-3.4' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E");
-}
-
-.ico,
-.todo-ico {
-  display: inline-block;
-  flex: 0 0 auto;
-  width: 1em;
-  height: 1em;
-  vertical-align: -0.12em;
-  background-color: currentColor;
-  -webkit-mask-image: var(--ico);
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-position: center;
-  -webkit-mask-size: contain;
-  mask-image: var(--ico);
-  mask-repeat: no-repeat;
-  mask-position: center;
-  mask-size: contain;
-}
-
-.ico-agents { --ico: var(--ico-agents); }
-.ico-sessions { --ico: var(--ico-sessions); }
-.ico-tool { --ico: var(--ico-tool); }
-.ico-todo { --ico: var(--ico-todo); }
-
-/* 图标在胶囊/仪表里的尺寸：比文字小半号，垂直居中对齐数字 */
-.chip .ico,
-.gauge .ico {
-  width: 8.5px;
-  height: 8.5px;
-  margin-right: 3px;
-  vertical-align: -0.08em;
-  opacity: 0.9;
-}
-
-/* 折叠态胶囊/仪表的图标走 data-icon：renderer 只写属性，图标由 CSS 出。
- * 这样渲染层不用造 <i> 节点、也不用关心图标长什么样（旧版是 emoji 字符
- * 的人形/层叠/勾选，字形随系统字体变，两个渲染层各写一遍迟早漂移）。
- * currentColor + mask 让琥珀/危险态的胶囊图标自动跟着文字色变，
- * 不需要为每种状态再出一套图。 */
-#c-chip[data-icon]::before,
-#c-gauge[data-icon]::before {
-  content: "";
-  display: inline-block;
-  flex: 0 0 auto;
-  width: 8.5px;
-  height: 8.5px;
-  margin-right: 3px;
-  vertical-align: -0.08em;
-  opacity: 0.9;
-  background-color: currentColor;
-  -webkit-mask-image: var(--ico);
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-position: center;
-  -webkit-mask-size: contain;
-  mask-image: var(--ico);
-  mask-repeat: no-repeat;
-  mask-position: center;
-  mask-size: contain;
-}
-
-#c-chip[data-icon="stack"]::before { --ico: var(--ico-sessions); }
-#c-chip[data-icon="users"]::before { --ico: var(--ico-agents); }
-#c-chip[data-icon="tool"]::before  { --ico: var(--ico-tool); }
-/* ready 是「什么都没发生」的默认胶囊，再挂一个图标只会增加噪音 */
-#c-chip[data-icon="ready"]::before { content: none; }
-#c-gauge[data-icon="ctx"]::before   { --ico: var(--ico-ctx); }
-#c-gauge[data-icon="check"]::before { --ico: var(--ico-todo); }
 
 * { box-sizing: border-box; }
 
@@ -192,13 +53,14 @@ html, body {
   overflow: hidden;
   /* 窗口比岛大一圈（给外发光留绘制空间），岛在其中顶端居中 —— 与 Mac 的
      ZStack(alignment:.top) + bleed 同构 */
+  width: 100%; /* The transparent canvas must not clip a child wider than the compact island. */
   height: 100%;
   display: flex;
   justify-content: center;
   align-items: flex-start;
   font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
-  /* 数字（耗时/轮次/上下文/记号）全部等宽 —— 走字不左右抖 */
+  /* 提醒计数与时间标签使用等宽数字。 */
   font-variant-numeric: tabular-nums;
 }
 
@@ -243,28 +105,31 @@ html, body {
               border-radius var(--spring-ms) var(--spring);
 }
 
-/* 状态色板由 renderer 写（契约 §3：不同 data-status 只改 --glow）。
- * 取值与 Mac `ActivityStatus.glowRGB` / `windows/src/activity.js` 逐值一致：
- *   idle #50505A · thinking #4E7CFF · tool #00D2AA · waiting #FFAA00 · done #4ADE80
- *
- * **CSS 这里不再定义第二份**：状态色只有一个写入方（renderer 每拍往 :root
- * 写 inline --glow），而元素上的声明永远打得过继承值 —— 若这里按
- * [data-status] 再写一遍，renderer 换色时会被静默覆盖，症状是「颜色怎么改
- * 都不对」却没有任何报错。:root 的默认灰只用于「首帧快照还没到」的极短窗口。
- */
-
+/* 状态色板由 renderer 写；主岛与每一行均只取自明确的五态。 */
 .island[data-expanded="1"] {
   width: var(--island-w-expanded);
   border-radius: 0 0 var(--r-expanded) var(--r-expanded);
 }
 
+/* An idle/offline label determines its own width. calc-size lets the existing spring
+   interpolate between the natural label width and the fixed active/expanded widths. */
+.island[data-expanded="0"][data-live="0"] { width: calc-size(max-content, size); }
+.island[data-expanded="0"][data-live="0"] .island-clip { padding-inline: 0; }
+.island[data-expanded="0"][data-live="0"] .compact { padding-inline: 8px; justify-content: center; gap: 0; }
+.island[data-expanded="0"][data-live="0"] .title { container-type: normal; flex: 0 0 auto; }
+.island[data-live="0"] :is(#c-dot, #c-chip) { display: none; }
+.island[data-expanded="0"][data-live="0"] .title-text { animation: none; }
+
+/* The child was ~300px under the old 316px strip and 330px under the HUD.
+   Preserve those independent targets even when only a four-character label is above it. */
+.island[data-expanded="0"] .urgent-island { width: 300px; }
 /* 独立视觉胶囊；位于裁剪层之外，仍随主岛缩放和移动。 */
 .urgent-island {
   position: absolute;
   top: calc(100% + 8px);
   left: 50%;
   transform: translateX(-50%);
-  width: min(330px, 95%);
+  width: 330px;
   height: 28.5px;
   display: flex;
   align-items: center;
@@ -385,9 +250,7 @@ html, body {
 }
 
 /* 内发光带：状态色从顶端往下淡出（Mac: glow.opacity(0.34) → 0）。
- * 折叠 34px / 展开 48px。折叠态宽度只有 380，34px 的渐变尾巴正好落在
- * 信息带后面，读作「从屏幕边缘透出的光」；v1 曾让它随高度铺满整个岛，
- * 展开时上半屏全是色，文字对比度直接崩，所以是**绝对高度**。 */
+ * 折叠 14px / 展开 48px。固定带高，避免渐变覆盖展开会话列表。 */
 .band {
   position: absolute;
   left: 0;
@@ -430,19 +293,6 @@ html, body {
   align-items: stretch;
   -webkit-app-region: no-drag;
 }
-
-/* 钉住提示：折叠/展开都在最上面一行，Mac 把这条放 hintArea，
- * Windows 独立成一条，因为这里没有菜单栏可以借用。 */
-.pinned-hint {
-  font-size: 9.5px;
-  color: var(--text-ghost);
-  text-align: center;
-  padding-top: 8px;
-  margin-bottom: 4px;
-  -webkit-app-region: no-drag;
-}
-
-.pinned-hint:empty { display: none; }
 
 /* ───────────────── compact / hud 模式切换（交叉淡化） ─────────────────
  *
@@ -491,43 +341,6 @@ html, body {
   transition: opacity var(--mode-ms) ease, visibility 0s var(--mode-ms);
 }
 
-/* ───────────────── 分层入场（契约 §6.3） ─────────────────
- *
- * 展开时按信息层级依次浮现：hdr(0) → pressure(20) → detail(50) →
- * todo(80) → list(110) → stats(140) → footer(170)。每层 opacity 0→1 +
- * translateY(3px→0)，220ms。
- *
- * 为什么是 animation 而不是 transition：入场是「模式进入」这个事件，不是
- * 属性前后两态 —— 用 transition 得给每层准备一个隐藏旧值，而交叉淡化期间
- * 旧模式还在淡出，两套过渡会互相干扰。animation 的触发条件是
- * animation-name 变化：离开 hud 模式时选择器不再匹配（name 回到 none），
- * 再进入时 none → layer-in，动画自然重放；fill-mode: both 让 delay 期间
- * 保持 from 状态（否则会先闪一帧再淡入）。
- *
- * 收起时全部 0 延迟：退场由上面的 140ms 交叉淡化 + 岛体高度弹簧负责，
- * 内容层不再错峰 —— 给退场加延迟只会让「收」看起来拖泥带水。
- */
-.island:is([data-mode="hud"], [data-expanded="1"]) .hud > * {
-  animation: layer-in var(--snap-ms) var(--snap) both;
-}
-
-.island:is([data-mode="hud"], [data-expanded="1"]) .hud > .hdr      { animation-delay: 0ms; }
-.island:is([data-mode="hud"], [data-expanded="1"]) .hud > .pressure { animation-delay: 20ms; }
-.island:is([data-mode="hud"], [data-expanded="1"]) .hud > .detail   { animation-delay: 50ms; }
-.island:is([data-mode="hud"], [data-expanded="1"]) .hud > .todo     { animation-delay: 80ms; }
-/* 提醒区块与列表同属「信息列表层」，用同一个 110ms —— 它是列表的第 0 行，
- * 单独再插一档延迟就等于把契约 §6.3 那条阶梯（0/20/50/80/110/140/170）
- * 改成八档，而八档在这个 220ms 的窗口里已经分不出先后了。 */
-.island:is([data-mode="hud"], [data-expanded="1"]) .hud > .nudges   { animation-delay: 110ms; }
-.island:is([data-mode="hud"], [data-expanded="1"]) .hud > .list     { animation-delay: 110ms; }
-.island:is([data-mode="hud"], [data-expanded="1"]) .hud > .stats    { animation-delay: 140ms; }
-.island:is([data-mode="hud"], [data-expanded="1"]) .hud > .footer   { animation-delay: 170ms; }
-
-/* ───────────────── 折叠态：屏幕顶端的一条信息带 ─────────────────
- * 口径照 Mac compactRow：11.5pt 标题 + 6px 点 + 最多一个仪表/徽标。
- * 空间要精打细算：在干什么（左）+ 会话数/子代理/工具胶囊（右）+ 仪表 + 耗时。
- */
-
 .dot {
   width: 6px;
   height: 6px;
@@ -553,8 +366,9 @@ html, body {
   container-type: inline-size;
 }
 
-/* Long text scrolls only as far as necessary; shorter labels remain stationary. */
-.title-text { display: block; width: max-content; white-space: nowrap; animation: compact-title-scroll 9s ease-in-out infinite; }
+/* Short titles stay static. Only a visible title with measured overflow scrolls. */
+.title-text { display: block; width: max-content; white-space: nowrap; }
+.island[data-mode="compact"] .title.overflows .title-text { animation: compact-title-scroll 9s ease-in-out infinite; }
 @keyframes compact-title-scroll {
   0%, 15% { transform: translateX(0); }
   75%, 90% { transform: translateX(min(0px, calc(100cqw - 100%))); }
@@ -582,155 +396,6 @@ html, body {
 /* 收起态 14px 内保留徽标文字的完整行高。 */
 .compact .chip { padding-block: 0.5px; }
 
-/* 折叠态的状态仪表（上下文 / 耗时）—— 等宽、灰阶分层 */
-.gauge {
-  font-size: 9.5px;
-  line-height: 1.35;
-  color: var(--text-soft);
-  flex: 0 0 auto;
-  white-space: nowrap;
-  display: inline-flex;
-  align-items: center;
-}
-
-/* 上下文告警色：与 Mac contextColor 同值（过半琥珀 / 超 80% 红） */
-.gauge.warn   { color: rgba(240, 158, 38, 1); }
-.gauge.danger { color: rgba(227, 74, 74, 1); }
-
-/* 折叠态耗时和上下文共用仪表位；显式声明等宽数字，别指望继承 ——
-   这个节点由渲染层按状态重建内容，继承链上任何一处字体回退都会让它抖。 */
-.gauge.elapsed { font-variant-numeric: tabular-nums; }
-
-/* ───────────────── 提醒徽标（折叠态，契约 §2.2） ─────────────────
- *
- * `?N`（待选择）/ `!N`（失败）/ `✔N`（完成），N = 同类条目 count 之和。
- * 底色沿用胶囊（白 10%），只有文字色按类别分三档 —— 折叠条只有 34px 高，
- * 再给整块徽标上彩色底会把「一条安静的信息带」变成告警条。
- *
- * 点数太多时省略号会吃掉标题：徽标是 flex:0 0 auto，标题是 flex:1 1 auto，
- * 挤压顺序由 CSS 决定，不需要渲染层算宽度（那会引入同步布局）。
- */
-.nudge-badge {
-  font-variant-numeric: tabular-nums;
-  color: var(--text-soft);
-}
-
-.nudge-badge.choice {
-  color: var(--nudge-choice);
-  background: color-mix(in srgb, var(--nudge-choice) 16%, transparent);
-}
-
-.nudge-badge.failed {
-  color: var(--nudge-failed);
-  background: color-mix(in srgb, var(--nudge-failed) 16%, transparent);
-}
-
-.nudge-badge.done {
-  color: var(--nudge-done);
-  background: color-mix(in srgb, var(--nudge-done) 16%, transparent);
-}
-
-/* 内发光带的一点点强调：**只调不透明度，不引入第二份 --glow**。
- *
- * 「有件事等你」时那条光即使没有活跃会话也亮着 —— 这正是它该说的话：
- * 岛平时为空就藏了，而提醒到了必须让它有存在感。颜色仍由 --glow 说
- * （renderer 已按类别覆盖过它），这里不再多一种色。
- *
- * ⚠️ 只能写 `opacity: 1`，不能写 0：`[data-live="1"]` 那条也是 opacity:1、
- * 特异性相同。写 0 会把「有活跃会话、但没提醒」的常态内发光带整条掐掉 ——
- * 而且这个回归不会报错，只表现为「岛突然不发光了」。
- */
-.island[data-nudge="choice"] .band,
-.island[data-nudge="failed"] .band,
-.island[data-nudge="done"] .band {
-  opacity: 1;
-}
-
-/* ───────────────── 状态动效（契约 §6.4） ─────────────────
- *
- * 只动状态点（六像素的东西，怎么动都便宜）和内发光带的廉价层。
- * 全部要求 data-glow="1"：glowEffect 关掉时连动效一起退场，
- * 而不是「没光了但还在闪」。
- */
-.island[data-status="thinking"][data-glow="1"] :is(#c-dot, #h-dot) {
-  animation: dot-breathe 2.4s ease-in-out infinite;
-  will-change: transform, opacity;
-}
-
-.island[data-status="tool"][data-glow="1"] :is(#c-dot, #h-dot) {
-  animation: dot-tool 1.6s ease-in-out infinite;
-  will-change: transform;
-}
-
-.island[data-status="waiting"][data-glow="1"] :is(#c-dot, #h-dot) {
-  animation: dot-heartbeat 1.2s ease-in-out infinite;
-  will-change: transform;
-}
-
-/* 等待确认的外发光脉冲：琥珀色心跳。opacity 0.55→0.9 是 Mac 那一档
- * 的强度，再高会像报警灯、抢走「需要人」的语义。 */
-.island[data-status="waiting"][data-glow="1"]::after {
-  animation: glow-pulse 1.2s ease-in-out infinite;
-  will-change: opacity;
-}
-
-/* ───────────────── 展开 HUD ───────────────── */
-
-/* 头部：状态点 + 状态角标芯片 + 标题 + 轮次 + 右侧提示区，
- * 底下一条发丝线（Mac: white 0.08, 0.5px）。 */
-.hdr {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  height: 20px;
-  margin-top: 9px;
-  position: relative;
-  flex: 0 0 auto;
-}
-
-.hdr::after {
-  content: "";
-  position: absolute;
-  left: 2px;
-  right: 2px;
-  bottom: -4px;
-  height: 1px;
-  background: var(--hairline);
-}
-
-.badge {
-  font-size: 9.5px;
-  font-weight: 600;
-  line-height: 1.35;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--glow);
-  background: color-mix(in srgb, var(--glow) 18%, transparent);
-  border-radius: 4px;
-  padding: 2px 6px;
-  flex: 0 0 auto;
-  white-space: nowrap;
-  transition: color 0.3s ease, background-color 0.3s ease;
-}
-
-.h-title {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-dim);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.h-step {
-  font-size: 9.5px;
-  color: var(--text-soft);
-  flex: 0 0 auto;
-  white-space: nowrap;
-}
-
 /* 头部右侧提示区。优先级照 Mac hintArea：跳转反馈 > 钉住 > 默认提示 */
 .hint {
   font-size: 9.5px;
@@ -742,128 +407,7 @@ html, body {
 .hint.ok  { color: rgb(140, 235, 184); }
 .hint.pin { color: color-mix(in srgb, var(--glow) 90%, transparent); }
 
-/* ───────────────── 上下文压力条（契约 §6.7） ─────────────────
- *
- * 2px 高，颜色从 --glow 走到琥珀/红。门槛判定在 renderer（它知道
- * fraction），这里只认 data-level=0/1/2 —— CSS 没法拿数值做比较。
- * renderer 侧约定：#pressure.dataset.level，以及 #pressure-fill 的
- * --ctx（百分比，如 "46%"）或直接 inline width。两者都支持：
- * inline width 优先级更高，--ctx 是给「只写变量」路径留的口子。
- */
-.pressure {
-  position: relative;
-  height: 2px;
-  margin: 5px 2px 0;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
-  overflow: hidden;
-  flex: 0 0 auto;
-}
-
-.pressure-fill {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: var(--ctx, 0%);
-  border-radius: inherit;
-  background: linear-gradient(90deg,
-    color-mix(in srgb, var(--glow) 55%, transparent),
-    var(--glow));
-  transition: width 260ms var(--snap);
-}
-
-/* >50%：琥珀。>80%：红。用 data-level 而不是 :has(> .fill[style*="..."])，
- * 后者在每次宽度变化时都要重新匹配，等于给热路径加了一笔。 */
-.pressure[data-level="1"] .pressure-fill {
-  background: linear-gradient(90deg,
-    color-mix(in srgb, rgb(240, 158, 38) 45%, transparent),
-    rgb(240, 158, 38));
-}
-
-.pressure[data-level="2"] .pressure-fill {
-  background: linear-gradient(90deg,
-    color-mix(in srgb, rgb(227, 74, 74) 45%, transparent),
-    rgb(227, 74, 74));
-}
-
-/* ───────────────── 详情正文块（单会话） ─────────────────
- * Mac：mono 11pt 淡蓝，白 7% 圆角底；点它 = 跳到该会话。
- *
- * 结构上拆成两层（外层 .detail = 外框 / 内层 .detail-text = 文本截断），
- * 不是多此一举：单层 `display:-webkit-box + -webkit-line-clamp + padding`
- * 在 Chromium 152 下会漏 —— overflow 的裁剪边是 padding-box，而 clamp 只
- * 把**内容框**压到 N 行，于是第 N+1 行的顶部几个像素会画进底部 padding 区，
- * 底边露出一条被切掉一半的字。外层 padding + 内层 clamp 则完全干净
- * （lead 已用三组对照实测：单层漏 / display:block 不截断 / 两层干净）。
- * 所以：clamp 相关声明只许待在内层，内层也不许加 padding。
- */
-.detail {
-  margin: 7px 2px 0;
-  padding: 6px 8px;
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.07);
-  overflow: hidden;
-  /* -webkit-line-clamp / -webkit-box-orient 一律不写在这一层（见上面的漏字说明） */
-  flex: 0 0 auto;
-  -webkit-app-region: no-drag;
-  cursor: pointer;
-  transition: background-color 0.15s ease;
-}
-
-.detail-text {
-  display: -webkit-box;
-  /* 3 行封顶；有 todo 行时收成 2 行（Mac 的 lineLimit 随 hasTodo 变），
-     否则展开态高度会被正文吃掉、待办和统计被挤到窗口外。 */
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  word-break: break-all;
-  font-size: 11px;
-  line-height: 1.45;
-  color: var(--detail-ink);
-}
-
-.island:has(#todo:not(.is-off)) .detail-text { -webkit-line-clamp: 2; }
-
-.detail:hover { background: rgba(255, 255, 255, 0.10); }
-
-/* ───────────────── 待办行 ───────────────── */
-
-.todo {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 6px;
-  font-size: 10.5px;
-  color: var(--text-dim);
-  flex: 0 0 auto;
-}
-
-.todo:empty { display: none; }
-
-.todo-ico {
-  --ico: var(--ico-todo);
-  width: 10px;
-  height: 10px;
-  color: rgba(255, 255, 255, 0.45);
-}
-
-.todo .cur {
-  flex: 1 1 auto;
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.todo .prog {
-  font-size: 10px;
-  color: var(--text);
-  flex: 0 0 auto;
-  white-space: nowrap;
-}
-
+.hint.failed { color: #ff8b82; }
 /* ───────────────── 提醒区块（展开 HUD，契约 §2.2） ─────────────────
  *
  * 结构：`.nudge[data-kind]` > `.nudge-bar`（类色条）+ `.nudge-label` +
@@ -871,7 +415,7 @@ html, body {
  *
  * ## 为什么是「色条 + 两段文字」而不是卡片
  *
- * HUD 展开只有 436px 宽、最多 4 条提醒。卡片（边框 + 底色 + 内边距）在
+ * HUD 展开宽度有限、最多 4 条提醒。卡片（边框 + 底色 + 内边距）在
  * 这个尺寸上会把每条压成两行，四条就是八行 —— 岛体撑到几百像素高，
  * 从屏幕顶端看下去像一块告示板。色条 + 单行文字是同信息量下最矮的写法，
  * 而且色条本身就是类别信号，不需要再加图标。
@@ -886,13 +430,16 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  margin-top: 6px;
+  max-height: 154px;
+  overflow-y: auto;
+  margin-top: 2px;
   flex: 0 0 auto;
 }
 
 .nudges:empty { display: none; }
 
 .nudge {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 7px;
@@ -900,12 +447,12 @@ html, body {
   padding: 1px 6px;
   border-radius: 5px;
   -webkit-app-region: no-drag;
-  cursor: pointer;
   /* 只过渡 background-color：卡片上不出现 box-shadow/filter 过渡（契约 §6.2） */
   transition: background-color 0.15s ease;
 }
 
-.nudge:hover { background: rgba(255, 255, 255, 0.13); }
+.nudge.can-jump { cursor: pointer; }
+.nudge.can-jump:hover { background: rgba(255, 255, 255, 0.13); }
 
 /* 类色条：3px 宽的一条竖线，颜色是这条提醒的类别。
  * 用 border-left 而不是伪元素：伪元素要多一个节点、还要 absolute 定位，
@@ -991,15 +538,6 @@ html, body {
 .row.primary-row { background: rgba(255, 255, 255, 0.09); }
 .row:hover { background: rgba(255, 255, 255, 0.13); }
 
-/* 行内状态点颜色：renderer 按行写 inline --dot（每个会话自己的状态色）；
- * data-status 这份是「只写属性」路径的兜底，值与 Mac glowRGB 一致。
- * 不要用 nth-child 之类去猜状态 —— 行会增删，猜出来的颜色迟早错位。 */
-.row[data-status="idle"]     { --dot: #50505A; }
-.row[data-status="thinking"] { --dot: #4E7CFF; }
-.row[data-status="tool"]     { --dot: #00D2AA; }
-.row[data-status="waiting"]  { --dot: #FFAA00; }
-.row[data-status="done"]     { --dot: #4ADE80; }
-
 /* 键盘焦点行：仅键盘（renderer 按 ↑/↓ 加 .focused，或 :focus-visible），
  * 鼠标点击不出现焦点环 —— 鼠标已经有 hover 反馈了。 */
 .row.focused,
@@ -1015,7 +553,7 @@ html, body {
 .row .label {
   font-size: 10.5px;
   font-weight: 400;
-  color: var(--text-faint);
+  color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1024,74 +562,18 @@ html, body {
   min-width: 0;
 }
 
-.row.live .label { color: var(--text); font-weight: 600; }
-
-.row .action {
-  display: none;
-  font-size: 10px;
-  color: rgba(255, 255, 255, 0.42);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.row.live .action { color: rgba(255, 255, 255, 0.70); }
+.row.primary-row .label { color: var(--text); font-weight: 600; }
 
 .row .tag {
   font-size: 9px;
   line-height: 1.35;
-  color: rgba(255, 255, 255, 0.5);
-  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-dim);
+  background: var(--chip);
   border-radius: 999px;
   padding: 1px 5px;
   flex: 0 0 auto;
   white-space: nowrap;
 }
-
-.row.live .tag { color: rgba(255, 255, 255, 0.85); background: rgba(255, 255, 255, 0.12); }
-
-.row .elapsed {
-  font-size: 9.5px;
-  color: rgba(255, 255, 255, 0.55);
-  flex: 0 0 auto;
-  white-space: nowrap;
-  min-width: 38px;
-  text-align: right;
-}
-
-/* ───────────────── 统计行 ─────────────────
- * Mac statsRow：「标签: 值」成对，标签 40% 白、值等宽 85% 白，
- * 顶部一条发丝线。整行可点 = 跳主会话（多会话时目标明确）。
- */
-.stats {
-  margin-top: 8px;
-  padding-top: 7px;
-  border-top: 1px solid var(--hairline);
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 10px;
-  color: var(--text-faint);
-  flex-wrap: wrap;
-  flex: 0 0 auto;
-  -webkit-app-region: no-drag;
-  cursor: pointer;
-}
-
-.stats:empty { display: none; }
-
-.stat b {
-  font-weight: 400;
-  font-size: 10px;
-  color: rgba(255, 255, 255, 0.85);
-}
-
-.stat.warn b { color: rgba(240, 158, 38, 1); }
-.stat.danger b { color: rgba(227, 74, 74, 1); }
-
-.stats:hover .stat b { color: rgba(255, 255, 255, 0.95); }
 
 /* ───────────────── 末行：桥状态 / 跳转反馈 / 设置 ─────────────────
  * Windows 特有（Mac 把这些放菜单栏），样式对齐 Mac metaRow：9pt 灰阶。
@@ -1107,29 +589,8 @@ html, body {
   flex: 0 0 auto;
 }
 
-/* The expanded island focuses on sessions and reminders. Settings and bridge
- * status remain available from the tray; jump feedback stays in the header. */
-.hud .stats, .hud .footer { display: none; }
-.footer:empty { display: none; }
-
-.footer .foot-left {
-  display: inline-flex;
-  align-items: center;
-  min-width: 0;
-  white-space: nowrap;
-}
-
-#bridge-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
-.footer .jump { color: rgb(140, 235, 184); white-space: nowrap; }
-.footer .jump.failed { color: rgb(227, 74, 74); }
-
 .footer .link {
+  background: none; border: 0; font: inherit;
   color: rgba(255, 255, 255, 0.42);
   cursor: pointer;
   padding: 2px 4px;
@@ -1141,23 +602,6 @@ html, body {
 
 .footer .link:hover { color: var(--text); background: rgba(255, 255, 255, 0.08); }
 
-.bridge-dot {
-  display: inline-block;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  margin-right: 4px;
-  background: rgba(255, 255, 255, 0.3);
-  transition: background-color 0.25s ease;
-}
-
-.bridge-dot.on { background: rgb(74, 222, 128); }
-
-/* 桥活着但队列里压着没被消费的跳转 —— 橙色，
-   区别于绿色（一切正常）和灰色（桥没起）。
-   这是「用户点了岛但 DSH 没切过去」唯一的可视线索。 */
-.pending { color: #FFAA00; }
-
 /* 空态：一个会话都没有时给个说得清的提示，而不是空白 */
 .empty {
   font-size: 11.5px;
@@ -1166,45 +610,7 @@ html, body {
   padding: 4px 0;
 }
 
-/* ───────────────── keyframes ─────────────────
- *
- * 全部只碰 transform / opacity：软件渲染下这两样是合成器能接手的；
- * 碰 width/left/top 就是每帧强制布局 + 重绘，循环动画尤其要命。
- */
-@keyframes layer-in {
-  from { opacity: 0; transform: translateY(3px); }
-  to   { opacity: 1; transform: none; }
-}
-
-/* 思考：2.4s 呼吸，scale 1→1.25、透明度微降（契约 §6.4 的定值） */
-@keyframes dot-breathe {
-  0%, 100% { transform: scale(1); opacity: 0.92; }
-  50%      { transform: scale(1.25); opacity: 0.72; }
-}
-
-/* 工具：1.6s 弹性呼吸（带回弹，像被工具调用一下下顶着） */
-@keyframes dot-tool {
-  0%, 100% { transform: scale(1); }
-  30%      { transform: scale(1.22); }
-  55%      { transform: scale(0.96); }
-  75%      { transform: scale(1.06); }
-}
-
-/* 等待确认：1.2s 琥珀心跳（双峰，像脉搏） */
-@keyframes dot-heartbeat {
-  0%, 100% { transform: scale(1); }
-  12%      { transform: scale(1.35); }
-  24%      { transform: scale(1); }
-  36%      { transform: scale(1.22); }
-  48%      { transform: scale(1); }
-}
-
-/* 外发光脉冲：opacity 0.55 ↔ 0.9（契约 §6.4 的定值） */
-@keyframes glow-pulse {
-  0%, 100% { opacity: 0.55; }
-  50%      { opacity: 0.9; }
-}
-
+.empty:empty { display: none; }
 
 /* ───────────────── 无障碍：系统「减少动态效果」 ─────────────────
  *

@@ -42,7 +42,6 @@ function rendererHarness() {
   }
   const nodes = new Map();
   const node = id => { if (!nodes.has(id)) nodes.set(id, new Element()); return nodes.get(id); };
-  node('detail').className = 'detail is-off';
   let onSnapshot;
   const jumps = [];
   const acknowledgements = [];
@@ -55,52 +54,51 @@ function rendererHarness() {
   const window = { addEventListener() {}, island: {
     onSnapshot: callback => { onSnapshot = callback; },
     jump: value => { jumps.push(value); return Promise.resolve({ kind: 'bridged' }); },
-    ackNudge: value => { acknowledgements.push(value); return Promise.resolve({ ok: true }); },
+    nudgeAck: value => { acknowledgements.push(value); return Promise.resolve({ ok: true }); },
   } };
   const context = { document, window, requestAnimationFrame() {}, setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, console };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/renderer.js'), 'utf8'), context, { filename: 'renderer.js' });
   return { node, jumps, acknowledgements, snapshot: snap => onSnapshot(snap) };
 }
 
-test('one idle session remains a clickable list row with action on the right', () => {
+test('compact trusts the five-state projection, not old tool, count or progress fields', () => {
   const ui = rendererHarness();
-  ui.snapshot({ rev: 'one-idle', entries: [{ id: 's1', label: '合成主会话', status: 'idle', badge: 'Ready', actionText: '待命', detailText: '等待指令输入' }], nudges: [], config: {}, bridge: {} });
+  ui.snapshot({ entries: [{ id: 'a', label: '编译', status: 'running', tag: 'read', actionText: '执行 read', todoText: '1/3', elapsedText: '00:12' }, { id: 'b', label: '检查', status: 'done' }] });
+  assert.equal(ui.node('c-title-text').textContent, '编译');
+  assert.equal(ui.node('c-chip').textContent, '运行中');
+  assert.equal(ui.node('c-gauge').textContent + ui.node('c-elapsed').textContent, '');
+});
+
+test('every row exposes only the supplied session name and canonical state, and jumps by ID', () => {
+  const ui = rendererHarness();
+  const statuses = ['running', 'waiting', 'done', 'failed', 'interrupted'];
+  const labels = ['甲', '乙', '丙', '丁', '戊'];
+  const entries = statuses.map((status, i) => ({ id: `id-${i}`, label: labels[i], status, actionText: '不应泄漏', elapsedText: '10:00' }));
+  ui.snapshot({ rev: 'five', entries });
   ui.node('compact').click();
-  assert.equal(ui.node('island').getAttribute('data-mode'), 'hud');
-  assert.equal(ui.node('detail').classList.contains('is-off'), true, 'standalone detail must not be displayed');
   const rows = ui.node('list').children;
-  assert.equal(rows.length, 1, 'one session still has one visible session row');
-  assert.equal(rows[0].children[1].textContent, '合成主会话');
-  assert.equal(rows[0].children[3].textContent, '待命');
-  ui.node('list').click(rows[0]);
-  assert.equal(ui.jumps.length, 1);
-  assert.equal(ui.jumps[0].id, 's1');
+  assert.deepEqual(rows.map(row => row.textContent), ['甲运行中', '乙待回答', '丙回合完成', '丁失败', '戊中断']);
+  rows.forEach(row => ui.node('list').click(row));
+  assert.deepEqual(ui.jumps.map(jump => jump.id), entries.map(entry => entry.id));
   assert.equal(ui.acknowledgements.length, 0);
 });
 
-test('multiple sessions keep their titles, Chinese actions and individual jumps', () => {
+test('no status is inferred from a reminder, an unknown entry, or a disconnected feed', () => {
   const ui = rendererHarness();
-  const entries = [
-    { id: 'a', label: '主会话甲', status: 'thinking', actionText: '深度思考中' },
-    { id: 'b', label: '主会话乙', status: 'tool', actionText: '执行中' },
-  ];
-  ui.snapshot({ rev: 'two', entries, nudges: [], config: {}, bridge: {} });
-  ui.node('compact').click();
-  const rows = ui.node('list').children;
-  assert.equal(rows.length, 2);
-  assert.deepEqual(rows.map(row => [row.children[1].textContent, row.children[3].textContent]), [
-    ['主会话甲', '深度思考中'], ['主会话乙', '执行中'],
-  ]);
-  assert.equal(ui.node('detail').classList.contains('is-off'), true);
-  ui.node('list').click(rows[1]);
-  assert.equal(ui.jumps[0].id, 'b');
-  assert.equal(ui.acknowledgements.length, 0);
+  ui.snapshot({ entries: [null, { id: 's', label: '旧条目', status: 'idle', badge: '已完成' }], nudges: [{ id: 'nh', kind: 'completed' }] });
+  assert.equal(ui.node('c-title-text').textContent, '暂无会话');
+  assert.equal(ui.node('c-chip').textContent, '');
+  ui.snapshot({ entries: [{ id: 's', label: '测试', status: 'done' }] });
+  assert.equal(ui.node('c-chip').textContent, '回合完成');
+  ui.snapshot({ entries: [{ id: 's', label: '旧缓存', status: 'interrupted' }], bridge: { ok: true, statesOnline: false } });
+  assert.equal(ui.node('c-title-text').textContent, '状态暂不可用');
+  assert.equal(ui.node('c-chip').textContent + ui.node('list').textContent, '');
 });
 
 test('transition from multiple to one session preserves the remaining clickable row', () => {
   const ui = rendererHarness();
-  const a = { id: 'a', label: '原会话', status: 'idle', actionText: '待命' };
-  const b = { id: 'b', label: '保留会话', status: 'thinking', actionText: '思考中' };
+  const a = { id: 'a', label: '原会话', status: 'done' };
+  const b = { id: 'b', label: '保留会话', status: 'running' };
   ui.snapshot({ rev: 'before', entries: [a, b], nudges: [], config: {}, bridge: {} });
   ui.node('compact').click();
   assert.equal(ui.node('list').children.length, 2);
@@ -109,7 +107,7 @@ test('transition from multiple to one session preserves the remaining clickable 
   assert.equal(rows.length, 1);
   assert.equal(rows[0].getAttribute('data-id'), 'b');
   assert.equal(rows[0].children[1].textContent, '保留会话');
-  assert.equal(rows[0].children[3].textContent, '思考中');
+  assert.equal(rows[0].textContent, '保留会话运行中');
   ui.node('list').click(rows[0]);
   assert.equal(ui.jumps[0].id, 'b');
 });
@@ -121,7 +119,6 @@ test('zero sessions with a synthetic reminder retains the reminder without inven
   ui.node('compact').click();
   assert.equal(ui.node('island').getAttribute('data-mode'), 'hud');
   assert.equal(ui.node('list').children.length, 0);
-  assert.equal(ui.node('detail').classList.contains('is-off'), true);
   assert.equal(ui.node('nudges').children.length, 1);
   assert.equal(ui.node('nudges').children[0].getAttribute('data-id'), 'fake-notice');
   assert.equal(ui.acknowledgements.length, 0);

@@ -208,6 +208,7 @@ function bridgeDto(b) {
   const o = (b && typeof b === 'object') ? b : {};
   return {
     ok: o.ok === true,
+    ...(typeof o.statesOnline === 'boolean' ? { statesOnline: o.statesOnline } : {}),
     port: (typeof o.port === 'number' && Number.isFinite(o.port)) ? o.port : 47311,
     pending: count(o.pending),
   };
@@ -378,7 +379,12 @@ function revOf(payload) {
 function buildSnapshot(input) {
   const i = (input && typeof input === 'object') ? input : {};
   const now = (typeof i.now === 'number' && Number.isFinite(i.now)) ? i.now : Date.now();
-  const entries = Array.isArray(i.entries) ? i.entries.map(mapEntry) : [];
+  // The paired Windows host supplies validated semantic rows. Forward only
+  // identity and phase; a tool name, output, or token count cannot enter IPC.
+  // The old entries projection remains available for offline v2 fixtures/tools.
+  const entries = Array.isArray(i.states)
+    ? i.states.map(({id, label, status, at}) => ({ id, label, status, at, live:true, shortId:shortIdOf(id) }))
+    : Array.isArray(i.entries) ? i.entries.map(mapEntry) : [];
   // 提醒的映射单独 try：它不该有抛的机会（nudgesDto 内部已经全量兜底），
   // 但**整份快照的构造**不能被一条坏提醒带崩 —— 那会让岛停在旧数据上，
   // 而「一条提醒画不出来」只是少一行。

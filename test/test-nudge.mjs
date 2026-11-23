@@ -214,7 +214,7 @@ console.log('=== N8: 事件采集（turn/end 的五种 kind）===');
 
   center.ackAll(); nowMs += 5000;
   emit('turn/end', { reason: { kind: 'max-tokens' } });
-  eq('max-tokens 也算完成（但要写清被截断）', center.list()[0].detail, '输出被长度上限截断');
+  eq('输出被截断是中断，不生成完成提醒', center.list().length, 0);
 
   center.ackAll(); nowMs += 5000;
   emit('turn/end', { reason: { kind: 'error', error: { message: 'boom' } } });

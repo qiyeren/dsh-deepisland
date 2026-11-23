@@ -15,7 +15,7 @@ test('Windows starts only a paired archive and never downloads an unpaired one',
   const saved = { local: process.env.LOCALAPPDATA, req: http.request, https: https.request, get: https.get, fetch: globalThis.fetch };
   try {
     fs.mkdirSync(path.join(dir, 'lib'));
-    for (const file of ['index.js', 'nudge.js', 'browser-api.js', 'bridge-owner.js']) fs.copyFileSync(path.join(root, 'lib', file), path.join(dir, 'lib', file));
+    for (const file of ['index.js', 'nudge.js', 'browser-api.js', 'bridge-owner.js', 'session-status.js']) fs.copyFileSync(path.join(root, 'lib', file), path.join(dir, 'lib', file));
     fs.writeFileSync(path.join(dir, 'package.json'), '{"type":"module"}');
     const shim = path.join(dir, 'node_modules', '@deepseek-ai', 'schemastery');
     fs.mkdirSync(shim, { recursive: true });

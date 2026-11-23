@@ -21,7 +21,7 @@ const windows = (dir, complete = true) => { put(path.join(dir, 'DSHNotch.exe'));
 const mac = (dir, complete = true) => { put(path.join(dir, 'DSHNotch.app', 'Contents', 'MacOS', 'DSHNotch')); if (complete) put(path.join(dir, 'DSHNotch.app', 'Contents', 'Resources', 'zstdlite')); };
 try {
   fs.mkdirSync(path.join(temp, 'lib'), { recursive: true });
-  for (const name of ['index.js', 'nudge.js', 'browser-api.js', 'bridge-owner.js']) fs.copyFileSync(path.join(root, 'lib', name), path.join(temp, 'lib', name));
+  for (const name of ['index.js', 'nudge.js', 'browser-api.js', 'bridge-owner.js', 'session-status.js']) fs.copyFileSync(path.join(root, 'lib', name), path.join(temp, 'lib', name));
   // Only the isolated test module trusts our disposable fixture archive.
   const index = path.join(temp, 'lib', 'index.js');
   const digest = createHash('sha256').update('fixture').digest('hex');

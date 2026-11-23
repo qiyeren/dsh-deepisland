@@ -35,9 +35,9 @@ check('上限与窗口和 Swift 版一致', S.MAX_SESSIONS === 6 && S.ACTIVE_WIN
   S.MAX_SESSIONS + '/' + S.ACTIVE_WINDOW_MS);
 
 console.log('\n=== W2: prettyProject（项目名还原）===');
-check('--Users-delinger-Desktop-deepisland-- → deepisland',
-  S.prettyProject('--Users-delinger-Desktop-deepisland--') === 'deepisland',
-  String(S.prettyProject('--Users-delinger-Desktop-deepisland--')));
+check('--example-workspaces-demo-- → demo',
+  S.prettyProject('--example-workspaces-demo--') === 'demo',
+  String(S.prettyProject('--example-workspaces-demo--')));
 check('只有一段时原样返回', S.prettyProject('--solo--') === 'solo', String(S.prettyProject('--solo--')));
 check('末段长度 < 2 返回 null（与 Swift 版一致）',
   S.prettyProject('--a-b--') === null, String(S.prettyProject('--a-b--')));
@@ -54,7 +54,7 @@ if (files.length === 0) {
   check('有 id（= 会话目录名）', typeof f.id === 'string' && f.id.length > 0, f.id);
   // 真实数据里会话目录名有两种：`session-<uuid>` 和裸 `<uuid>`（与投影文件的
   // 两种命名同源，README 已记录）。断言只钉「是个合法 uuid 形态」，不钉前缀 ——
-  // 钉死前缀会在本机有裸 uuid 会话时误报（2026-10-18 实测到 ddedf682-...）。
+  // 钉死前缀会在有裸 uuid 的会话时误报。
   check('id 形如 session-<uuid> 或裸 <uuid>',
     /^(session-)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(f.id), f.id);
   check('有 project 名', typeof f.project === 'string' && f.project.length > 0, f.project);
@@ -142,7 +142,7 @@ console.log('\n=== W6: 目录缺失时的容错 ===');
   check('loadLatestEvents 返回空数组', Array.isArray(S.loadLatestEvents()) && S.loadLatestEvents().length === 0);
 
   // 造一个三层结构的假会话，验路径推导
-  const d = path.join(fake, 'sessions', '--Users-x-Desktop-demo--', 'session-abc-123');
+  const d = path.join(fake, 'sessions', '--example-workspaces-demo--', 'session-abc-123');
   fs.mkdirSync(d, { recursive: true });
   fs.writeFileSync(path.join(d, 'session.v4.jsonl.zstd'), Buffer.alloc(64));
   S.invalidate();
@@ -150,7 +150,7 @@ console.log('\n=== W6: 目录缺失时的容错 ===');
   check('能发现三层结构的会话', got.length === 1, '找到 ' + got.length);
   if (got.length === 1) {
     check('id 取会话目录名', got[0].id === 'session-abc-123', got[0].id);
-    check('project 取项目目录名', got[0].project === '--Users-x-Desktop-demo--', got[0].project);
+    check('project 取项目目录名', got[0].project === '--example-workspaces-demo--', got[0].project);
   }
 
   // 不存在的根目录

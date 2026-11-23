@@ -403,11 +403,11 @@ y=480  黑底[-]                 → 底部在 470px = 235pt ✅ 正好等于设
 - **真实发现**：走完整 `poll` 路径（发现 → 解压 → 游标 → 投影 → 排序），
   断言候选数 = 轮询结果数、每个都有展示名、按 mtime 倒序、
   降频轮不丢会话、`reset()` 后能重建。
-  本机现场输出（当时 2 个活跃会话）：
+  输出示例（保留当时的数量与状态，会话标识和标题为虚构值）：
 
 ```
-候选会话 2 个: session-deb090, session-a59ae8
-首帧: 会话 2 个 [高难度数学试卷出题(idle), 分析调试代码问题(idle)] 主会话「DeepSeek 待命」
+候选会话 2 个: session-111111, session-222222
+首帧: 会话 2 个 [整理示例文档(idle), 检查示例构建(idle)] 主会话「DeepSeek 待命」
 ```
 
 ### 8. 跳转链路（`./build.sh jump-test`）
@@ -439,8 +439,8 @@ $ ./build.sh jump-test
 
 两个源都按**每个会话**分别读取（多会话监控的核心），发现规则见上方
 「多会话：跟谁、排第几」。列表里显示的会话名取投影的 `title`（DSH 自己总结的，
-如「高难度数学试卷出题」），取不到时退回项目目录名
-（`--Users-delinger-Desktop-office--` → `office`），再退回 id 前 8 位。
+如「整理示例文档」），取不到时退回项目目录名
+（`--example-workspaces-docs--` → `docs`），再退回 id 前 8 位。
 
 ### A. 会话事件流 —— 「正在发生什么」
 
@@ -485,12 +485,12 @@ zstd 压缩的 JSONL，每行一条事件。结构（逆向 dsh 0.2.0-rc.2 确�
 | `subagentCatalog` | 已派生的子代理目录 | 只有 `{id, createdAt, mode, label}`，**不含运行态** |
 
 **关键实证：投影与事件流完全同步。** 实测三个会话的 `proj.seq` 与
-`events.maxSeq` 逐一相等（滞后 0 个事件序号），所以它可以当实时数据源用：
+`events.maxSeq` 逐一相等（滞后 0 个事件序号），所以它可以当实时数据源用。下列会话标识为虚构值：
 
 ```
-session-6778327d  proj.seq=544  events.maxSeq=544
-session-a59ae858  proj.seq=88   events.maxSeq=88
-session-9a3fb65c  proj.seq=75   events.maxSeq=75
+session-33333333  proj.seq=544  events.maxSeq=544
+session-22222222  proj.seq=88   events.maxSeq=88
+session-44444444  proj.seq=75   events.maxSeq=75
 ```
 
 （注意 `row.seq` 是「该值最后一次变化」的序号，通常小于 `maxSeq` 属正常；
@@ -580,15 +580,15 @@ DSH 运行中: true
 `AXIsProcessTrusted()` 会继承终端/宿主 App 的授权，和装到 /Applications 后的
 真实进程不是一回事（本机实测：命令行报「已授权」，真实 app 报「未授权」）。
 
-典型输出（真实运行）：
+典型输出（保留实测数值，会话标识和标题为虚构值）：
 
 ```
 屏幕度量: 屏幕 1280×832@2x | 刘海 156×28 @(x=562,y=804) | 折叠 208×50 | 展开 440×176（单会话）/ 最高 235（6 会话）
-候选会话 2 个: session-deb090, session-a59ae8
+候选会话 2 个: session-111111, session-222222
 loadEvents: session.v4.jsonl.zstd 解压 161562 字节 / 90 行 → 解码成功 90 条
-projections: session-a59ae858….json seq=159 turns=6 steps=16 out=10567 ctx=1.5%
-首帧: 会话 2 个 [高难度数学试卷出题(idle), 分析调试代码问题(idle)] 主会话「DeepSeek 待命」
-会话 2 个: 高难度数学试卷出题(idle,待命) | 分析调试代码问题(idle,待命)
+projections: session-22222222….json seq=159 turns=6 steps=16 out=10567 ctx=1.5%
+首帧: 会话 2 个 [整理示例文档(idle), 检查示例构建(idle)] 主会话「DeepSeek 待命」
+会话 2 个: 整理示例文档(idle,待命) | 检查示例构建(idle,待命)
 ```
 
 最后一行每秒打一次，就是多会话监控的现场快照：两个对话各自的**标题**与状态。

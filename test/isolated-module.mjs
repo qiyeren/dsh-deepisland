@@ -17,7 +17,7 @@ export function createIsolatedModule() {
   };
   try {
     fs.mkdirSync(path.join(dir, 'lib'));
-    for (const file of ['index.js', 'nudge.js', 'browser-api.js', 'bridge-owner.js']) {
+    for (const file of ['index.js', 'nudge.js', 'browser-api.js', 'bridge-owner.js', 'session-status.js']) {
       fs.copyFileSync(path.join(ROOT, 'lib', file), path.join(dir, 'lib', file));
     }
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ type: 'module' }));

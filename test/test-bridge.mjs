@@ -157,7 +157,7 @@ let bridge = null;
 console.log('\n=== T3: 跳转请求入队 → 取出 → 清空 ===');
 // ===========================================================================
 if (bridge) {
-  const SID = 'session-6778327d-5342-4e47-9efa-d21d0db954a6';
+  const SID = 'session-00000000-0000-4000-8000-000000000001';
   const p = await postJson(base, '/jump', { sessionId: SID, title: '点岛验收' });
   check('POST /jump 200', p.status === 200, String(p.status));
   check('POST /jump 回 ok + seq', p.body.ok === true && p.body.seq === 1, JSON.stringify(p.body));

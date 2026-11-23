@@ -31,12 +31,12 @@ nudge 的真正价值是**事件语义**（三类、严重度、合并、静音�
 
 | 时刻 | 来源 | 判定 |
 | --- | --- | --- |
-| 完成 | `ctx.on('session/event')` → `turn/end` | `reason.kind` ∈ `completed` / `max-tokens`；`max-tokens` 明细写「输出被长度上限截断」 |
+| 完成 | `ctx.on('session/event')` → `turn/end` | 仅 `reason.kind === 'completed'`；达到输出上限在 Windows 主岛显示「中断」，不发完成提醒 |
 | 失败 | 同上 | `reason.kind` ∈ `error` / `blocked`（`blocked` 是「本回合没有执行」，不算完成）；`aborted` 不提醒 |
 | 单次工具失败 | 同上 → `tool/result` | 不单独生成失败提醒；任务可能继续或恢复，最终回合失败仍按 `turn/end` 提醒 |
 | 待选择 | `ctx.on('approval/request', (req, next) => …)` | waterfall 观察者，**必须 `return next()`**，否则劫持审批链 |
 | 待选择 | 包装 `ctx.get('userQuestions').ask` | 原样转发，卸载时还原原函数并删掉幂等标记 |
-| 标题 | `session/title` 事件 → 本地缓存 | 另外**每次需要时**再试 `ctx.get('sessionTitle').get(session).title`；**不要读 `session.header.title`**（该字段不存在） |
+| 标题 | `session/title` 事件 → 本地缓存 | 没有本地标题时只取已物化的 `sessionProjections.cachedSnapshot(session, ['title'])` 显示提示，缺失用短 ID，不折叠历史 |
 
 过滤：对 `session/event`，忽略 `session.header.parentSession != null` 或 `delegationDepth > 0` 的子代理会话。审批与提问路径不做该过滤，因此子代理的待选择请求仍可能产生提醒；不要假定父会话一定汇总所有子任务事件。
 

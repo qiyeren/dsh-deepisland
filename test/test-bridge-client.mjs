@@ -184,7 +184,7 @@ console.log('\n=== T2: 端到端 —— POST /jump → 客户端 openSession ===
     client.state().base + ' vs 127.0.0.1:' + bridge.port);
 
   // 模拟 app 投递
-  const SID = 'session-6778327d-5342-4e47-9efa-d21d0db954a6';
+  const SID = 'session-00000000-0000-4000-8000-000000000001';
   const post = await req(bridge.port, '/jump', { method: 'POST', body: { sessionId: SID, title: '端到端' } });
   check('app 侧 POST /jump 成功', post.status === 200 && post.body.ok === true, JSON.stringify(post.body));
 

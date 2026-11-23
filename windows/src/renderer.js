@@ -4,7 +4,7 @@
  *
  * 只做四件事：把主进程推来的快照画出来、把点击翻译成一个 IPC、
  * 驱动展开/收起的弹簧形变、判定「指针在不在岛上」以切换点击穿透。
- * **不读文件、不算状态** —— 那些都在主进程（`monitor.js` / `projections.js`）。
+ * **不读文件、不推断会话状态** —— 五态来自主进程快照。
  *
  * ## v2 为什么重写（2026-10-18 全面优化）
  *
@@ -17,8 +17,7 @@
  * 2. **增量更新**：节点只建一次，之后 `textContent` / class / 变量按差异写；
  * 3. **零同步布局**：高度用 `ResizeObserver` 量、写 `--island-h`，由 CSS
  *    过渡；渲染热路径里没有 `offsetHeight` / `getBoundingClientRect`；
- * 4. **本地时钟**：耗时数字在渲染层按秒自己走，不靠主进程每秒推快照；
- * 5. **指针 rAF 节流**：`pointermove` 只记位置 + 脏标记，命中判定合并到
+ * 4. **指针 rAF 节流**：`pointermove` 只记位置 + 脏标记，命中判定合并到
  *    下一帧；矩形缓存，只在尺寸/模式变化后失效。
  *
  * ## 架构：窗口不动，岛在窗口里动
@@ -41,14 +40,10 @@
   /** 悬停驻留（毫秒）：进入等一等（防「划过屏幕顶端」误触），离开宽限一点。 */
   const HOVER_OPEN_MS = 200;
   const HOVER_CLOSE_MS = 350;
-  /** 折叠态命中区外扩（Mac hoverHotRect 的 insetBy(-8)）：跟手比精确重要。 */
+  /** 折叠态只上下外扩：窄条更易命中，同时左右的标题栏保留点击穿透。 */
   const HOT_MARGIN_PX = 8;
   /** 展开态已经很大，外扩收到 4px，避免把岛下方应用的可点区算进来。 */
   const HOT_MARGIN_EXPANDED = 4;
-  /** 耗时走字对齐到整秒；+16ms 是给定时器抖动留的余量。 */
-  const CLOCK_TICK_MS = 1000;
-  /** 指针事件的兜底复算周期：极端情况下（转发的 move 丢失）也不会卡在旧状态。 */
-  const SAFETY_RECHECK_MS = 1000;
   /** 跳转反馈 / 打开设置反馈的驻留时长。 */
   const RESULT_HOLD_MS = 6000;
 
@@ -92,12 +87,10 @@
     dshHintFailed: false,
     dshTimer: 0,
     focusIndex: -1,
-    clockTimer: 0,
     lastScale: null,
     lastGlow: null,
-    /** 会话行 / 统计项的节点缓存（增量更新的依据）。 */
+    /** 会话行的节点缓存（增量更新的依据）。 */
     rows: new Map(),
-    stats: new Map(),
     /**
      * 提醒（融合自 dsh-nudge）。元素形状 = 契约 §2.1 的八字段 DTO。
      *
@@ -159,88 +152,17 @@
 
   const GLOW_IDLE = '#50505A';
 
-  /**
-   * 三类提醒的展示口径（契约 §2.2）。
-   *
-   * 颜色只在这里出现一次：CSS 侧定义 `--nudge-choice` / `--nudge-failed` /
-   * `--nudge-done` 三个变量，这里只引用变量名 —— 两份十六进制色值必然会
-   * 在某个改动里分叉，而表现只是「徽标和色条不是一个颜色」，很难被当成
-   * bug 报上来。
-   */
-  const NUDGE_META = {
-    needs_choice: { glyph: '?', cls: 'choice', var: '--nudge-choice' },
-    failed: { glyph: '!', cls: 'failed', var: '--nudge-failed' },
-    completed: { glyph: '✔', cls: 'done', var: '--nudge-done' },
-  };
+  // A state is explicit evidence, never an inference from an action, clock or reminder.
+  const STATUS = new Map([
+    ['running',     { label: '运行中',   color: '#4E7CFF' }],
+    ['waiting',     { label: '待回答',   color: '#FFAA00' }],
+    ['done',        { label: '回合完成', color: '#4ADE80' }],
+    ['failed',      { label: '失败',     color: '#E74C3C' }],
+    ['interrupted', { label: '中断',     color: '#CEACFA' }],
+  ]);
 
-  /**
-   * 三类提醒的 `--glow` 覆盖色（契约 §2.2 写死的值）。
-   *
-   * 这里必须给真色值而不是变量：`--glow` 是「主会话状态色」，它是 CSS 里
-   * 所有派生色（内发光带、外发光、胶囊底、焦点环）的共同源头，只能吃一个
-   * 颜色，吃不了三份。而 `var()` 在 inline `style.setProperty` 里也能用 ——
-   * 用变量名同样可行，只是牌面上少一层间接，值仍只有一个来源。
-   */
-  const NUDGE_GLOW = { choice: '#F5A623', failed: '#E74C3C' };
-
-  /** 提醒类别按严重度排序（越小越该先处理），同档新的在前。 */
-  function nudgeKindOf(list) {
-    if (!Array.isArray(list) || !list.length) return 'none';
-    let best = null;
-    for (const n of list) {
-      if (!n || typeof n !== 'object') continue;
-      const meta = NUDGE_META[n.kind];
-      if (!meta) continue;
-      const sev = typeof n.severity === 'number' ? n.severity : 2;
-      if (best === null || sev < best.sev) best = { sev, kind: n.kind };
-    }
-    if (!best) return 'none';
-    if (best.kind === 'needs_choice') return 'choice';
-    if (best.kind === 'failed') return 'failed';
-    return 'done';
-  }
-
-  /** 同一类提醒的条数之和（契约 §2.2：N 是条目 count 之和，不是条目数）。 */
-  function nudgeCountOf(list, kind) {
-    let n = 0;
-    for (const it of list) {
-      if (it && it.kind === kind) n += (typeof it.count === 'number' && it.count > 0) ? it.count : 1;
-    }
-    return n;
-  }
-
-  function isLive(status) {
-    return !!status && status !== 'idle';
-  }
-
-  /** 毫秒 → mm:ss（超一小时给 h:mm:ss）。与 activity.js 的 formatDuration 逐字一致。 */
-  function formatDuration(ms) {
-    if (!(ms > 0) || !Number.isFinite(ms)) return '00:00';
-    const total = Math.floor(ms / 1000);
-    if (total >= 3600) {
-      const h = Math.floor(total / 3600);
-      const m = Math.floor((total % 3600) / 60);
-      const s = total % 60;
-      return h + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
-    }
-    const m = Math.floor(total / 60);
-    const s = total % 60;
-    return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
-  }
-
-  /**
-   * 某条会话的耗时文本。
-   *
-   * 优先用 `elapsedFrom`（epoch ms）在本地按秒算 —— 这样主进程只需要在
-   * 回合开始时推一次，不需要每秒推快照。旧快照只有 `elapsedText` 时退回去。
-   */
-  function elapsedTextOf(entry) {
-    if (!entry) return '';
-    if (typeof entry.elapsedFrom === 'number' && entry.elapsedFrom > 0) {
-      return formatDuration(Date.now() - entry.elapsedFrom);
-    }
-    return typeof entry.elapsedText === 'string' ? entry.elapsedText : '';
-  }
+  const sessionLabel = entry => entry.label || entry.shortId || entry.id;
+  const emptyLabel = () => state.snap?.bridge?.statesOnline === false ? '状态暂不可用' : '暂无会话';
 
   /** 当前配置（新协议是顶层字段；`raw` 兜住旧快照与 shots.js）。 */
   function config() {
@@ -260,21 +182,7 @@
     };
   }
 
-  /**
-   * 是否展开。优先级：钉住 > 等待确认 > 悬停。
-   *
-   * 「等待确认」自动展开的理由：这一档状态的意义就是「需要人」，折叠态
-   * 只有一行摘要撑不起它的分量；展开成 HUD 把等待行怼到眼前，用户才不会
-   * 一直晾着 DSH。与 macOS 版行为一致。
-   *
-   * ⚠️ **提醒绝不自动展开**（契约 §4.3）：用户可能在全屏操作，为一条「任务
-   * 完成」把 243px 的面板怼到屏幕上就是打断。它在折叠条上显示徽标，悬停
-   * （expandOnHover）才看到明细 —— 那一档本来就是用户自己的动作。
-   *
-   * 提醒只参与**空板判定**：没有会话但有待处理提醒时，悬停仍该展开 ——
-   * 否则折叠条那一个 `?1` 徽标点开什么都没有，信息断层。注意它只影响
-   * 「什么算空板」，不是一条展开理由（几条 return true 里都没有它）。
-   */
+  // 提醒可以使空板可供查看，但本身不强制展开。
   function shouldExpand() {
     if (!state.entries.length && !state.nudges.length) return false;
     if (state.pinned) return true;
@@ -287,8 +195,7 @@
   function onSnapshot(snap) {
     if (!snap || typeof snap !== 'object') return;
 
-    // rev 相同 = 内容一个字节都没变（含配置/桥/跳转）。此时唯一还需要走的
-    // 是本地秒级时钟，而它是独立定时器，所以整次渲染都可以跳过。
+    // Same content (including configuration and transport availability), no work.
     if (typeof snap.rev === 'string' && snap.rev && snap.rev === state.rev) return;
 
     state.snap = snap;
@@ -300,12 +207,14 @@
       state.rectDirty = true;
     }
 
-    const entries = Array.isArray(snap.entries) ? snap.entries : [];
+    const online = snap.bridge?.statesOnline !== false;
+    const entries = (online && Array.isArray(snap.entries) ? snap.entries : [])
+      .filter(e => e && typeof e.id === 'string' && e.id && STATUS.has(e.status));
     // A confirmed waiting → non-waiting transition retires only the choice
     // alerts seen during that waiting episode from this renderer's view.
     // The bridge queue is untouched; newly arrived IDs remain eligible.
     for (const entry of entries) {
-      if (!entry || !entry.id || !['thinking', 'tool', 'done', 'idle'].includes(entry.status) || !state.urgentWaitingEpochs.has(entry.id)) continue;
+      if (entry.status === 'waiting' || !state.urgentWaitingEpochs.has(entry.id)) continue;
       const oldChoices = state.nudges.filter((n) => n && n.sessionId === entry.id && n.kind === 'needs_choice' && n.id);
       if (!oldChoices.length) continue;
       const handled = state.urgentHandled.get(entry.id) || { waitingEpoch: 0, ids: new Set() };
@@ -313,9 +222,21 @@
       state.urgentHandled.set(entry.id, handled);
     }
     state.entries = entries;
-    const waitingIds = new Set(entries.filter((e) => e && e.id && e.status === 'waiting').map((e) => e.id));
-    for (const id of state.urgentWaitingEpochs.keys()) if (!waitingIds.has(id)) state.urgentWaitingEpochs.delete(id);
-    for (const id of waitingIds) if (!state.urgentWaitingEpochs.has(id)) state.urgentWaitingEpochs.set(id, ++state.urgentNextEpoch);
+    // `at` is the start of this state, not its last update. A rename/replay
+    // stays in the same episode; an intervening answer may be coalesced by the feed.
+    if (online) {
+      const waiting = new Set();
+      for (const e of entries) {
+        if (e.status !== 'waiting') continue;
+        waiting.add(e.id);
+        const at = Number.isFinite(e.at) && e.at > 0 ? e.at : 0;
+        const prior = state.urgentWaitingEpochs.get(e.id);
+        if (!prior || (at && prior.at && at !== prior.at)) {
+          state.urgentWaitingEpochs.set(e.id, { at, epoch: ++state.urgentNextEpoch });
+        } else if (at) prior.at = at;
+      }
+      for (const id of state.urgentWaitingEpochs.keys()) if (!waiting.has(id)) state.urgentWaitingEpochs.delete(id);
+    }
     state.primary = entries.length ? entries[0] : null;
     // 快照里的 nudges 恒是数组（snapshot.js 保证空列表仍是 []），但**渲染层
     // 照样兜一层**：契约要求「字段缺失 ↔ 空数组」不抖动，而兜底是这条
@@ -325,21 +246,16 @@
     const currentUrgent = new Map(urgentItems(true).map((item) => [item.id, item]));
     for (const [id, handled] of state.urgentHandled) {
       const current = currentUrgent.get(id);
-      if (!current) { state.urgentHandled.delete(id); continue; }
-      if (!current.waiting || current.waitingEpoch !== handled.waitingEpoch) handled.waitingEpoch = 0;
+      if (!current) {
+        if (online || !handled.waitingEpoch) state.urgentHandled.delete(id);
+        continue;
+      }
+      if (online && current.waitingEpoch !== handled.waitingEpoch) handled.waitingEpoch = 0;
       for (const nudgeId of handled.ids) if (!current.ids.includes(nudgeId)) handled.ids.delete(nudgeId);
       if (!handled.waitingEpoch && !handled.ids.size) state.urgentHandled.delete(id);
     }
 
-    // 主会话状态色。提醒只**覆盖**它，不另起一份：岛上的光、点、胶囊底、
-    // 焦点环全部派生自 --glow，多一份「提醒色」变量必然在某一处对不上。
-    const status = state.primary ? state.primary.status : 'idle';
-    const nudgeTone = nudgeKindOf(mainNudges());
-    let glow = (state.primary && state.primary.glow) || GLOW_IDLE;
-    if (nudgeTone === 'choice') glow = NUDGE_GLOW.choice;
-    else if (nudgeTone === 'failed' && status !== 'waiting') glow = NUDGE_GLOW.failed;
-    // 等待确认时不动 --glow：那一档本来就有自己的琥珀心跳，再叠一层红会让
-    // 「等人」和「失败」在颜色上混成一个，而它们的处理动作完全不同。
+    const glow = STATUS.get(state.primary?.status)?.color || GLOW_IDLE;
     if (state.lastGlow !== glow) {
       setCssVar(root, '--glow', glow);
       state.lastGlow = glow;
@@ -384,80 +300,32 @@
     if (state.mode !== mode) { state.mode = mode; state.rectDirty = true; }
 
     const island = $('island');
-    const status = primary ? primary.status : 'idle';
+    const status = primary ? primary.status : '';
     setAttr(island, 'data-mode', mode);
     setAttr(island, 'data-expanded', expanded ? '1' : '0');
     setAttr(island, 'data-status', status);
-    setAttr(island, 'data-live', isLive(status) ? '1' : '0');
-    setAttr(island, 'data-nudge', nudgeKindOf(mainNudges()));
+    setAttr(island, 'data-live', primary ? '1' : '0');
     setAttr(island, 'data-glow', cfg.glowEffect ? '1' : '0');
     setAttr(island, 'data-pinned', state.pinned ? '1' : '0');
-    setAttr(island, 'aria-label', ariaLabel(primary, entries, mainNudges()));
-
-    setText($('pinned-hint'), state.pinned ? '已钉住 · 点状态行取消' : '');
-    setHidden($('pinned-hint'), !state.pinned);
-
-    if (expanded) renderHud(entries, primary);
-    else renderCompact(entries, primary);
+    const name = primary ? sessionLabel(primary) : emptyLabel();
+    const tag = primary ? STATUS.get(status).label : '';
+    setAttr(island, 'aria-label', primary ? name + '，' + tag : name);
+    setHidden($('c-dot'), !primary);
+    renderCompact(name, tag);
+    if (expanded || !entries.length) renderRows(entries);
+    if (expanded) {
+      renderNudges(mainNudges());
+      // A completion can outlive its session row. It is content, not an empty HUD.
+      const showEmpty = !primary && (!state.nudgeRows.size || state.snap?.bridge?.statesOnline === false);
+      setText($('empty'), showEmpty ? name : '');
+    }
     renderUrgentIsland();
 
     updateHint();
-    scheduleClock();
 
     // 模式/尺寸可能变了：命中矩形失效，下一帧重估（不在这里同步读布局）
     state.rectDirty = true;
     queuePointerRecheck();
-  }
-
-  function ariaLabel(primary, entries, nudges) {
-    // 提醒优先：它才是「这回真需要你」的那条信息 —— 读屏用户听到
-    // 「3 个会话在跑」却漏掉「等你确认一件事」，等于这个标签没起作用。
-    const list = Array.isArray(nudges) ? nudges : [];
-    if (list.length) {
-      const tone = nudgeKindOf(list);
-      const meta = tone === 'choice' ? NUDGE_META.needs_choice
-        : tone === 'failed' ? NUDGE_META.failed
-          : tone === 'done' ? NUDGE_META.completed : null;
-      if (meta) {
-        const n = list.reduce((acc, it) => acc
-          + ((typeof it.count === 'number' && it.count > 0) ? it.count : 1), 0);
-        const head = list[0];
-        const what = (head && (head.label || head.detail)) || '';
-        return 'DSH 灵动岛：' + meta.glyph + n + ' 条提醒' + (what ? '，' + what : '');
-      }
-    }
-    if (!primary) return 'DSH 灵动岛：没有活跃会话';
-    const tag = primary.badge || primary.tag || '';
-    const name = primary.label || primary.shortId || '';
-    const count = entries.length > 1 ? '，共 ' + entries.length + ' 个会话' : '';
-    return 'DSH 灵动岛：' + tag + ' ' + name + count;
-  }
-
-  /* ───────────── 折叠态提醒徽标（契约 §2.2） ─────────────
-   *
-   * 徽标取「最严重那一类」的符号 + **该类条目 count 之和**，不是条目条数：
-   * 服务端把 1.2s 合并窗口内的同 (kind, sessionId) 事件累加进 count，
-   * 拿条数当 N 会把「同一件事被合并了 3 次」显示成「3 件事」。
-   *
-   * 只显示一类而不是三类并列：折叠态只有 380px 宽，四个节点（点/标题/
-   * 徽标/胶囊/仪表/耗时）已经排满；三类并列必然把标题挤成省略号，而标题
-   * 是「是哪个会话」的唯一线索。
-   */
-  function renderNudgeBadge(list) {
-    const badge = $('c-nudge');
-    const tone = nudgeKindOf(list);
-    if (tone === 'none') { setHidden(badge, true); setText(badge, ''); return; }
-
-    const kind = tone === 'choice' ? 'needs_choice' : tone === 'failed' ? 'failed' : 'completed';
-    const meta = NUDGE_META[kind];
-    const n = nudgeCountOf(list, kind);
-    setText(badge, meta.glyph + n);
-    setHidden(badge, false);
-    setClass(badge, 'choice', meta.cls === 'choice');
-    setClass(badge, 'failed', meta.cls === 'failed');
-    setClass(badge, 'done', meta.cls === 'done');
-    setAttr(badge, 'data-kind', kind);
-    setAttr(badge, 'aria-label', kindLabel(kind) + ' ' + n + ' 条');
   }
 
   /** 类别 → 中文标签。文案与服务端 KIND_LABEL 一致，改一处要同步两处。 */
@@ -467,103 +335,11 @@
     return '已完成';
   }
 
-  /* ───────────── 折叠态：一条信息带（Mac compactRow 口径） ───────────── */
-
-  function renderCompact(entries, primary) {
-    setCssVar($('c-dot'), '--dot', (primary && primary.glow) || GLOW_IDLE);
-    setText($('c-title-text'), primary ? (primary.label || primary.shortId || '会话') : '没有活跃会话');
-    renderNudgeBadge(mainNudges());
-
-    // 胶囊位：多会话显示在跑/总数，单会话显示工具或状态标签。
-    // 子代理计数不展示；单会话的工具/状态标签也不带图标。
-    const chip = $('c-chip');
-    let icon = '';
-    let text = '';
-    let ink = '';
-    if (!primary) {
-      text = 'Ready';
-    } else if (entries.length > 1) {
-      const live = entries.filter((e) => isLive(e.status)).length;
-      text = live > 0 ? live + '/' + entries.length : String(entries.length);
-      icon = 'stack';
-      if (entries.some((e) => e.status === 'waiting')) ink = '#FFAA00';
-    } else if (primary.tag) {
-      text = primary.tag;
-    }
-    setText(chip, text);
-    setHidden(chip, !text);
-    if (icon) setAttr(chip, 'data-icon', icon); else chip.removeAttribute('data-icon');
-    setCssVar(chip, '--chip-ink', ink || '');
-
-    // 收起态不展示上下文占用告警；待办进度仍可使用仪表位。
-    const gauge = $('c-gauge');
-    let gaugeText = '';
-    let level = '';
-    if (primary && primary.todoText) {
-      gaugeText = primary.todoText;
-      level = 'todo';
-    }
-    setText(gauge, gaugeText);
-    setHidden(gauge, !gaugeText);
-    setClass(gauge, 'warn', level === 'warn');
-    setClass(gauge, 'danger', level === 'danger');
-    setClass(gauge, 'todo', level === 'todo');
-    if (gaugeText) setAttr(gauge, 'data-icon', level === 'todo' ? 'check' : 'ctx');
-
-    // 耗时：只在活跃时显示 —— 待命会话的 elapsedFrom 是上一回合起点，
-    // 照着算会得出「已经跑了 3 小时」这种莫名数字，比留空更容易误读。
-    const elapsed = $('c-elapsed');
-    const elapsedOn = !!(primary && isLive(primary.status) && elapsedTextOf(primary));
-    setText(elapsed, elapsedOn ? elapsedTextOf(primary) : '');
-    setHidden(elapsed, !elapsedOn);
-  }
-
-  /* ───────────── 展开态：HUD（Mac expandedHUD 口径） ───────────── */
-
-  function renderHud(entries, primary) {
-    const multi = entries.length > 1;
-
-    setCssVar($('h-dot'), '--dot', (primary && primary.glow) || GLOW_IDLE);
-    setText($('h-badge'), primary ? (primary.badge || primary.tag || '') : 'READY');
-    setText($('h-title'), multi
-      ? entries.length + ' 个会话'
-      : (primary ? (primary.label || primary.shortId || '') : '没有活跃会话'));
-    const step = primary ? primary.turnStepText : '';
-    setText($('h-step'), step || '');
-    setHidden($('h-step'), !step);
-
-    // 上下文压力条：只在单会话、拿得到比例时出现。
-    // 它是「快满了」的早期预警：50% 转琥珀、80% 转红，和仪表同一条口径。
-    const pressure = $('pressure');
-    const frac = primary && typeof primary.contextFraction === 'number'
-      ? primary.contextFraction : null;
-    const pressureOn = !!primary && !multi && frac !== null && frac >= 0;
-    setHidden(pressure, !pressureOn);
-    if (pressureOn) {
-      const pct = Math.round(Math.min(1, Math.max(0, frac)) * 100);
-      setCssVar($('pressure-fill'), 'width', pct + '%');
-      const level = primary.contextLevel || (pct > 80 ? 2 : pct > 50 ? 1 : 0);
-      setAttr(pressure, 'data-level', level);
-      setAttr(pressure, 'aria-valuenow', pct);
-    }
-
-    // 展开态始终显示会话列表；单会话也不再用独立详情块代替列表。
-    setHidden($('detail'), true);
-    setText($('detail-text'), '');
-
-    // 待办行
-    const todo = $('todo');
-    const todoOn = !!primary && !multi && !!primary.todoText;
-    setHidden(todo, !todoOn);
-    if (todoOn) {
-      setText($('todo-cur'), primary.todoCurrent || '');
-      setText($('todo-prog'), primary.todoText);
-    }
-
-    renderRows(entries);
-    renderNudges(mainNudges());
-    renderStats(primary);
-    renderFooter();
+  function renderCompact(name, tag) {
+    setText($('c-title-text'), name);
+    setAttr($('c-title'), 'title', name);
+    setText($('c-chip'), tag);
+    setHidden($('c-chip'), !tag);
   }
 
   /* ───────────── 提醒区块（融合 dsh-nudge 的三种时刻） ─────────────
@@ -575,9 +351,7 @@
    * 提醒行若要并进去，就得再造一套「焦点指向哪一类」的索引，而两套索引
    * 一旦不一致，用户按 Enter 会跳到反的会话 —— 这个错非常难自查。
    *
-   * 所以提醒行**只响应点击**（契约 §2.2 的原话），键盘路径一行不动。
-   * 代价是键盘用户点不到提醒；补偿是折叠徽标 + aria-label 已经把这件
-   * 事说出来了，而提醒本来就是「看到再点」的交互，不是批量操作。
+   * 所以提醒行只响应点击，不占用会话键盘导航。
    *
    * ## 行结构
    *
@@ -604,14 +378,13 @@
 
   function updateNudgeRow(row, item) {
     const kind = item.kind;
-    const meta = NUDGE_META[kind] || NUDGE_META.completed;
     setAttr(row.node, 'data-kind', kind);
     setAttr(row.node, 'aria-label',
       kindLabel(kind) + '：' + (item.label || '') + (item.sessionId ? '（点击跳转）' : ''));
     setText(row.label, item.label || '');
     setHidden(row.label, !item.label);
-    setText(row.detail, item.detail || '');
-    setHidden(row.detail, !item.detail);
+    setText(row.detail, item.detail || kindLabel(kind));
+    setClass(row.node, 'can-jump', !!item.sessionId);
     // `at` 是服务端算好的 HH:MM（本地时钟口径不同，不能在渲染层重算 ——
     // 重算会把「21:03 收到」显示成「21:05」，那是另一台机器的钟）。
     const atText = item.at || '';
@@ -641,7 +414,6 @@
             (!Number.isFinite(previous.atMs) || item.atMs > previous.atMs)) items[index] = item;
       }
     }
-    setHidden(host, items.length === 0);
 
     const keep = new Set(items.map((it) => it && it.id).filter(Boolean));
     for (const [id, row] of state.nudgeRows) {
@@ -659,7 +431,7 @@
 
   // Keep non-navigable urgent reminders visible rather than silently hiding them.
   function mainNudges() {
-    return state.nudges.filter((n) => !n || !n.sessionId || (n.kind !== 'needs_choice' && n.kind !== 'failed'));
+    return state.nudges.filter((n) => n && (!n.sessionId || (n.kind !== 'needs_choice' && n.kind !== 'failed')));
   }
 
   // Count distinct sessions; live waiting state wins over a failed event.
@@ -667,7 +439,7 @@
   function urgentItems(includeHandled = false) {
     const bySession = new Map();
     for (const e of state.entries) {
-      if (e && e.id && e.status === 'waiting') bySession.set(e.id, { id: e.id, label: e.label || e.shortId || '会话', kind: 'choice', waiting: true, waitingEpoch: state.urgentWaitingEpochs.get(e.id), ids: [], choices: [] });
+      if (e && e.id && e.status === 'waiting') bySession.set(e.id, { id: e.id, label: e.label || e.shortId || '会话', kind: 'choice', waiting: true, waitingEpoch: state.urgentWaitingEpochs.get(e.id)?.epoch, ids: [], choices: [] });
     }
     for (const n of state.nudges) {
       if (!n || !n.sessionId || (n.kind !== 'needs_choice' && n.kind !== 'failed')) continue;
@@ -763,29 +535,22 @@
     dot.className = 'dot';
     const label = document.createElement('span');
     label.className = 'label';
-    const action = document.createElement('span');
-    action.className = 'action';
     const tag = document.createElement('span');
-    tag.className = 'tag mono';
-    const elapsed = document.createElement('span');
-    elapsed.className = 'elapsed mono';
-    node.append(dot, label, action, tag, elapsed);
-    return { node, dot, label, action, tag, elapsed };
+    tag.className = 'tag';
+    node.append(dot, label, tag);
+    return { node, dot, label, tag };
   }
 
   function updateRow(row, entry, index) {
-    setCssVar(row.dot, '--dot', entry.glow || GLOW_IDLE);
-    setClass(row.node, 'live', isLive(entry.status));
+    const status = STATUS.get(entry.status);
+    const name = sessionLabel(entry);
+    setCssVar(row.dot, '--dot', status.color);
     setClass(row.node, 'primary-row', index === 0);
     setClass(row.node, 'focused', index === state.focusIndex);
-    setAttr(row.node, 'data-status', entry.status || 'idle');
-    setText(row.label, entry.label || entry.shortId || '');
-    // Keep a single Chinese activity label in the former tag slot.
-    setText(row.action, '');
-    const statusText = { idle: '待命', thinking: '深度思考中', tool: '执行中', waiting: '等待确认', done: '已完成' };
-    setText(row.tag, entry.actionText || statusText[entry.status] || '');
-    setText(row.elapsed, isLive(entry.status) ? (elapsedTextOf(entry) || '--:--') : '--:--');
-    setAttr(row.node, 'aria-label', '跳转到 ' + (entry.label || entry.shortId || '会话'));
+    setAttr(row.node, 'data-status', entry.status);
+    setText(row.label, name);
+    setText(row.tag, status.label);
+    setAttr(row.node, 'aria-label', '跳转到 ' + name + '，' + status.label);
   }
 
   function renderRows(entries) {
@@ -807,90 +572,11 @@
     });
   }
 
-  /* ───────────── 统计行：固定槽位，只切显隐与值 ─────────────
-   *
-   * 槽位显示耗时 / 轮次 / 工具 / 输出 / 上下文，不展示子代理计数。
-   * 「待办」不在这里 —— 单会话有独立的待办行（当前项 + 2/5），多会话的
-   * 待办属于某一个会话、铺到全局统计行只会重复；Swift 版同样只放在待办行。
-   */
-
-  const STAT_DEFS = [
-    ['elapsed', '耗时'],
-    ['turn', '轮次'],
-    ['tools', '工具'],
-    ['output', '输出'],
-    ['context', '上下文'],
-  ];
-
-  function createStat(key, label) {
-    const node = document.createElement('span');
-    node.className = 'stat';
-    node.setAttribute('data-key', key);
-    node.append(document.createTextNode(label + ': '));
-    const value = document.createElement('b');
-    value.className = 'mono';
-    node.appendChild(value);
-    return { node, value };
-  }
-
-  function statValue(entry, key) {
-    if (!entry) return '';
-    switch (key) {
-      case 'elapsed': return elapsedTextOf(entry);
-      case 'turn': return entry.turnStepText || '';
-      case 'tools': return entry.toolCountText || '';
-      case 'output': return entry.outputText || '';
-      case 'context': return entry.contextText || '';
-      default: return '';
-    }
-  }
-
-  function renderStats(primary) {
-    const host = $('stats');
-    let visible = 0;
-    for (const [key, label] of STAT_DEFS) {
-      let item = state.stats.get(key);
-      if (!item) {
-        item = createStat(key, label);
-        state.stats.set(key, item);
-        host.appendChild(item.node);
-      }
-      const value = statValue(primary, key);
-      setHidden(item.node, !value);
-      if (value) visible += 1;
-      setText(item.value, value);
-      if (key === 'context') {
-        setClass(item.node, 'warn', !!primary && primary.contextLevel === 1);
-        setClass(item.node, 'danger', !!primary && primary.contextLevel === 2);
-      }
-    }
-    setHidden(host, visible === 0);
-  }
-
-  /* ───────────── 末行：桥状态 / 跳转反馈 / 设置 ───────────── */
-
-  function renderFooter() {
-    const bridge = (state.snap && state.snap.bridge) || {};
-    const ok = !!bridge.ok;
-    setClass($('bridge-dot'), 'on', ok);
-    let text = ok ? ('桥 ' + (bridge.port || '')) : '桥未连上';
-    const pending = ok && typeof bridge.pending === 'number' ? bridge.pending : 0;
-    if (pending > 0) text += ' · 待处理 ' + pending;
-    setText($('bridge-text'), text);
-    setClass($('bridge-text'), 'pending', pending > 0);
-
-    const jump = $('jump');
-    const on = !!(state.jump && state.jump.brief);
-    setText(jump, on ? state.jump.brief : '');
-    setHidden(jump, !on);
-    setClass(jump, 'failed', !!(state.jump && state.jump.kind === 'failed'));
-  }
-
   /* ───────────── 头部提示区：跳转反馈 > 钉住 > 默认提示 ───────────── */
 
   function updateHint() {
     const hint = $('h-hint');
-    let text = '点对话跳转 · 点状态行钉住';
+    let text = '点会话跳转 · 点空白钉住';
     let kind = '';
     if (state.dshHint && state.dshHintFailed) {
       text = state.dshHint;
@@ -902,46 +588,13 @@
       text = state.dshHint;
       kind = 'ok';
     } else if (state.pinned) {
-      text = '已钉住 · 点状态行取消';
+      text = '已钉住 · 点空白取消';
       kind = 'pin';
     }
     setText(hint, text);
     setClass(hint, 'ok', kind === 'ok');
     setClass(hint, 'pin', kind === 'pin');
     setClass(hint, 'failed', kind === 'failed');
-  }
-
-  /* ───────────────────────────── 本地秒级时钟 ─────────────────────────────
-   *
-   * 耗时数字必须自己走，否则主进程得每秒推一次快照（旧版就是这么干的，
-   * 而快照里还带着整个投影对象）。这里只改「时间文本」节点：文本节点改写
-   * 不触发重排，主线程成本可以忽略。
-   */
-
-  function scheduleClock() {
-    clearTimeout(state.clockTimer);
-    state.clockTimer = 0;
-    const anyLive = state.entries.some((e) => isLive(e.status)
-      && (typeof e.elapsedFrom === 'number' || typeof e.elapsedText === 'string'));
-    if (!anyLive) return;
-    const delay = CLOCK_TICK_MS - (Date.now() % CLOCK_TICK_MS) + 16;
-    state.clockTimer = setTimeout(tickClock, delay);
-  }
-
-  function tickClock() {
-    state.clockTimer = 0;
-    const primary = state.primary;
-    if (state.mode === 'compact') {
-      if (primary && isLive(primary.status)) setText($('c-elapsed'), elapsedTextOf(primary));
-    } else {
-      const elapsedItem = state.stats.get('elapsed');
-      if (elapsedItem && primary) setText(elapsedItem.value, elapsedTextOf(primary));
-      for (const [id, row] of state.rows) {
-        const entry = state.entries.find((x) => x.id === id);
-        if (entry && isLive(entry.status)) setText(row.elapsed, elapsedTextOf(entry) || '--:--');
-      }
-    }
-    scheduleClock();
   }
 
   /* ───────────────────────────── 高度：ResizeObserver → CSS 变量 ─────────────────────────────
@@ -968,6 +621,19 @@
       }
     });
     ro.observe(body);
+
+    // CSS cannot test text overflow directly. Only animate a long, visible title.
+    const title = $('c-title'), text = $('c-title-text');
+    let available = 0, natural = 0;
+    const titleSize = new ResizeObserver(changes => {
+      for (const change of changes) {
+        if (change.target === title) available = change.contentRect.width;
+        else natural = change.contentRect.width;
+      }
+      setClass(title, 'overflows', available > 0 && natural > available + 1);
+    });
+    titleSize.observe(title);
+    titleSize.observe(text);
   }
 
   /* ───────────────────────────── 指针命中与穿透 ───────────────────────────── */
@@ -982,7 +648,9 @@
   function hitIsland(x, y) {
     const r = islandRect();
     const m = state.expanded ? HOT_MARGIN_EXPANDED : HOT_MARGIN_PX;
-    return x >= r.left - m && x <= r.right + m && y >= r.top - m && y <= r.bottom + m;
+    // Keep vertical tolerance on the 14px strip, but release the title bar on either side.
+    const mx = state.expanded ? m : 0;
+    return x >= r.left - mx && x <= r.right + mx && y >= r.top - m && y <= r.bottom + m;
   }
 
   /** 合并到下一帧：pointermove 可能一秒几百次，命中判定只值每帧一次。 */
@@ -1108,10 +776,6 @@
     window.island.contextMenu({ pinned: state.pinned }).catch(() => { /* 主进程已记日志 */ });
   }
 
-  function jumpPrimary() {
-    if (state.primary) jumpTo(state.primary);
-  }
-
   function moveFocus(dir) {
     const rows = state.entries.slice(0, 6);
     if (!rows.length) return;
@@ -1141,7 +805,7 @@
 
   /** 这些区域有自己的点击语义，按下不应启动拖窗。 */
   function isClickControl(target) {
-    return !!(target && target.closest && (target.closest('[data-act], .row, #detail, #stats, .nudge') || target.closest('#urgent-island')));
+    return !!(target && target.closest && (target.closest('[data-act], .row, .nudge') || target.closest('#urgent-island')));
   }
 
   function onDragDown(ev) {
@@ -1183,19 +847,15 @@
 
     // 折叠态：点一下 = 钉住/取消（整条信息带是可点区）
     $('compact').addEventListener('click', () => togglePin());
-    // 钉住提示本身也属于「状态行」：点它就该取消钉住（文案写的就是这个意思）
-    $('pinned-hint').addEventListener('click', () => { if (state.pinned) togglePin(); });
     // 双击 = 把 DSH 叫到前面（省得去托盘里找）
     $('compact').addEventListener('dblclick', (ev) => { ev.preventDefault(); openDsh(); });
 
-    // 展开态：按区域分派。可点区（详情/统计/行/提醒/设置）自己处理，
+    // 展开态：按区域分派。可点区（会话行/提醒/设置）自己处理，
     // 其余空白 = 钉住/取消 —— 与 Swift 版的「点非对话区 = 钉住」同一分工。
     $('hud').addEventListener('click', (ev) => {
       const target = ev.target;
       if (target.closest('#list .row')) return;            // 行自己处理
       if (target.closest('#nudges .nudge')) return;        // 提醒行自己处理
-      if (target.closest('#detail')) { jumpPrimary(); return; }
-      if (target.closest('#stats')) { jumpPrimary(); return; }
       if (target.closest('[data-act="settings"]')) { openDsh(); return; }
       togglePin();
     });
@@ -1230,21 +890,27 @@
         clearTimeout(state.jumpTimer);
         state.jumpTimer = setTimeout(() => { state.jump = null; render(); }, RESULT_HOLD_MS);
         if (result && result.kind === 'bridged') {
-          state.urgentHandled.set(item.id, { waitingEpoch: item.waitingEpoch || 0, ids: new Set(item.ids) });
+          markUrgentHandled(item);
         }
         render();
       } catch { /* Preserve the item on failure. */ }
       finally { state.urgentInFlight = false; }
     });
 
-    // Both dismissal gestures affect presentation only, never the server queue.
-    function dismissUrgent() {
-      const item = urgentItems()[0];
-      if (!item) return;
+    // Merge with any dismissal made while this jump was in flight. An old
+    // completion must not replace the handled IDs or epoch of a newer wait.
+    function markUrgentHandled(item) {
       const previous = state.urgentHandled.get(item.id);
       const ids = new Set(previous ? previous.ids : []);
       for (const id of item.ids) ids.add(id);
       state.urgentHandled.set(item.id, { waitingEpoch: Math.max(previous?.waitingEpoch || 0, item.waitingEpoch || 0), ids });
+    }
+
+    // Both dismissal gestures affect presentation only, never the server queue.
+    function dismissUrgent() {
+      const item = urgentItems()[0];
+      if (!item) return;
+      markUrgentHandled(item);
       render();
     }
     const urgentClose = $('urgent-close');
@@ -1273,7 +939,7 @@
         if (state.pinned) { state.pinned = false; render(); }
         return;
       }
-      if (state.mode !== 'hud') return;
+      if (state.mode !== 'hud' || ev.target.closest?.('button')) return;
       if (ev.key === 'ArrowDown') { moveFocus(1); ev.preventDefault(); }
       else if (ev.key === 'ArrowUp') { moveFocus(-1); ev.preventDefault(); }
       else if (ev.key === 'Enter' && state.focusIndex >= 0) {
@@ -1316,13 +982,6 @@
       state.rectDirty = true;
       queuePointerRecheck();
     });
-
-    // 兜底：转发的 mousemove 在极端场景会丢（快速出窗、系统手势）。
-    // 每秒用最近一次指针位置重算一次，配合主进程 500ms 看门狗双保险。
-    setInterval(() => {
-      state.rectDirty = true;
-      evaluatePointer();
-    }, SAFETY_RECHECK_MS);
 
     // 主进程看门狗收回穿透后通知我们复位
     if (typeof window.island.onPointerLeave === 'function') {

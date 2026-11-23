@@ -9,7 +9,7 @@
  * DSH 的目录布局：
  * ```
  * ~/.dsh/sessions/<项目目录名>/<会话目录名>/session.v4.jsonl.zstd
- *     --Users-delinger-Desktop-office--   session-a59ae858-…
+ *     --example-workspaces-office--   session-<id>
  * ```
  *
  * ## 与 macOS 版的关键差异：zstd
@@ -148,7 +148,7 @@ function scanAllSessionFiles() {
 /**
  * 把 DSH 的项目目录名还原成人看得懂的名字（**兜底**用）。
  *
- * `--Users-delinger-Desktop-deepisland--` → `deepisland`
+ * `--example-workspaces-deepisland--` → `deepisland`
  * 规则：去掉首尾连字符（DSH 用 `--` 包裹路径），再把 `-` 当分隔符取最后一段。
  *
  * 与 Swift 版 `prettyProject` 行为一致（注意它要求末段长度 ≥ 2）。

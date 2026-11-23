@@ -28,21 +28,49 @@ app.whenReady().then(async () => {
   const main = fs.readFileSync(path.join(src, 'main.js'), 'utf8');
   const size = main.match(/const MAX_WINDOW = \{ w: (\d+), h: (\d+) \}/);
   if (!size) throw new Error('Production window size unavailable');
-  const win = new BrowserWindow({ width: Number(size[1]), height: Number(size[2]), show: false, frame: false, transparent: true, webPreferences: { preload: path.join(src, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false, backgroundThrottling: false } });
+  const win = new BrowserWindow({ width: Number(size[1]), height: Number(size[2]), show: false, frame: false, transparent: true, webPreferences: { preload: path.join(src, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false, backgroundThrottling: false, offscreen: true } });
   await win.loadFile(path.join(src, 'index.html'));
-  const entries = Array.from({ length: 8 }, (_, i) => ({ id: `session-test-${i}`, label: `Synthetic session ${i}`, status: i === 0 ? 'waiting' : 'thinking', live: true, glow: '#ffaa00', tag: 'WAITING', badge: 'WAITING', actionText: 'Synthetic action', detailText: 'Synthetic details', turnStepText: 'T3·S7', contextText: '32%', contextFraction: 0.32 }));
+  // Each opening gesture, on its own, must expose a hit-testable completion row.
+  for (const hover of [false, true]) {
+    win.webContents.send('island:snapshot', { rev: `completion-only-${hover}`, entries: [], nudges: [{ id: 'notice', sessionId: 'finished', kind: 'completed', label: '归档报告' }], config: { expandOnHover: hover }, bridge: { ok: true, statesOnline: true } });
+    if (hover) win.webContents.send('island:cursor', { x: Number(size[1]) / 2, y: 6, inside: true });
+    else await win.webContents.executeJavaScript("document.querySelector('#compact').click()");
+    await new Promise(resolve => setTimeout(resolve, 800));
+    const completion = await win.webContents.executeJavaScript(`(() => {
+      const row = document.querySelector('#nudges .nudge');
+      const box = row?.getBoundingClientRect();
+      const hit = box && document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+      const hud = document.querySelector('#hud');
+      return { reachable: !!hit && row.contains(hit), text: hud.innerText, expanded: document.querySelector('#island').dataset.expanded };
+    })()`);
+    if (completion.expanded !== '1' || !completion.reachable || !completion.text.includes('归档报告') || !completion.text.includes('已完成') || /暂无会话|提醒（/.test(completion.text)) throw new Error('One expansion must directly expose the completion reminder: ' + JSON.stringify({ hover, completion }));
+    if (hover) win.webContents.send('island:cursor', { inside: false });
+    else await win.webContents.executeJavaScript("document.querySelector('#h-hint').click()");
+  }
+  const entries = Array.from({ length: 8 }, (_, i) => ({ id: `session-test-${i}`, label: `Synthetic session ${i}`, status: i === 0 ? 'waiting' : 'running', live: true, glow: '#ffaa00', tag: 'WAITING', badge: 'WAITING', actionText: 'Synthetic action', detailText: 'Synthetic details', turnStepText: 'T3·S7', contextText: '32%', contextFraction: 0.32 }));
   const nudges = Array.from({ length: 8 }, (_, i) => ({ id: `test-nudge-${i}`, kind: 'completed', severity: 2, sessionId: `session-test-${i}`, label: `Synthetic reminder ${i}`, detail: 'Synthetic completed event', at: '10:00', count: 1 }));
   for (const scale of [0.5, 1, 2]) {
     win.setSize(Math.round(Number(size[1]) * scale), Math.round(Number(size[2]) * scale));
     win.webContents.send('island:snapshot', { v: 2, rev: `synthetic-expanded-${scale}`, entries, nudges, config: { scale, glowEffect: true, expandOnHover: true, notchEnabled: true, jumpEnabled: true }, bridge: { ok: true, port: 0, pending: 0 }, jump: null, serverNow: Date.now() });
     await new Promise((resolve) => setTimeout(resolve, 1600));
-    const geometry = await win.webContents.executeJavaScript(`(() => { const r = id => { const b = document.querySelector(id).getBoundingClientRect(); return { top: b.top, bottom: b.bottom, height: b.height }; }; const island = document.querySelector('#island'); const style = getComputedStyle(island); return { viewport: innerHeight, island: r('#island'), footer: r('.footer'), stats: r('#stats'), urgent: r('#urgent-island'), urgentVisible: getComputedStyle(document.querySelector('#urgent-island')).display !== 'none', mode: island.dataset.expanded, bottomLeft: style.borderBottomLeftRadius, bottomRight: style.borderBottomRightRadius, sessionRows: document.querySelectorAll('#list .row').length, nudgeRows: document.querySelectorAll('#nudges .nudge').length }; })()`);
+    const geometry = await win.webContents.executeJavaScript(`(() => { const r = id => { const b = document.querySelector(id).getBoundingClientRect(); return { top: b.top, bottom: b.bottom, height: b.height, width: b.width, left: b.left }; }; const island = document.querySelector('#island'); const style = getComputedStyle(island); return { viewport: innerHeight, island: r('#island'), footer: r('.footer'), reminders: r('#nudges'), urgent: r('#urgent-island'), urgentVisible: getComputedStyle(document.querySelector('#urgent-island')).display !== 'none', mode: island.dataset.expanded, bottomLeft: style.borderBottomLeftRadius, bottomRight: style.borderBottomRightRadius, sessionRows: document.querySelectorAll('#list .row').length, nudgeRows: document.querySelectorAll('#nudges .nudge').length }; })()`);
+    const lastReachable = await win.webContents.executeJavaScript(`(() => {
+      const reminders = document.querySelector('#nudges');
+      reminders.scrollTop = reminders.scrollHeight;
+      const last = reminders.lastElementChild;
+      const b = last.getBoundingClientRect();
+      const hit = document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2);
+      reminders.scrollTop = 0;
+      return last.dataset.id === 'test-nudge-7' && !!hit && last.contains(hit);
+    })()`);
+    if (!lastReachable) throw new Error('Last ordinary reminder must be reachable by scrolling at scale ' + scale);
     console.log(JSON.stringify({ scale, ...geometry }));
-    if (geometry.mode !== '1' || geometry.island.bottom > geometry.viewport + 0.5 || geometry.footer.height !== 0 || geometry.stats.height !== 0 || parseFloat(geometry.bottomLeft) <= 0 || parseFloat(geometry.bottomRight) <= 0 || geometry.sessionRows !== 6 || geometry.nudgeRows !== 8 || !geometry.urgentVisible || geometry.urgent.top < geometry.island.bottom || geometry.urgent.bottom > geometry.viewport + 0.5) throw new Error('Expanded island, footer, rounded corners, rows, or urgent child invalid');
+    if (Math.abs(geometry.island.width - 350 * scale) > 0.5 || Math.abs(geometry.urgent.width - 330 * scale) > 0.5 || Math.abs(geometry.urgent.left - geometry.island.left - 10 * scale) > 0.5) throw new Error('Expanded main/child widths or centering invalid at scale ' + scale);
+    if (geometry.mode !== '1' || geometry.island.bottom > geometry.viewport + 0.5 || geometry.footer.height <= 0 || geometry.footer.bottom > geometry.island.bottom + 0.5 || geometry.reminders.height <= 0 || parseFloat(geometry.bottomLeft) <= 0 || parseFloat(geometry.bottomRight) <= 0 || geometry.sessionRows !== 6 || geometry.nudgeRows !== 8 || !geometry.urgentVisible || geometry.urgent.top < geometry.island.bottom || geometry.urgent.bottom > geometry.viewport + 0.5) throw new Error('Expanded island, footer, rounded corners, rows, or urgent child invalid');
   }
   // The single-session HUD must use the same left-title/right-action row as the multi-session HUD.
   win.setSize(Number(size[1]), Number(size[2]));
-  win.webContents.send('island:snapshot', { v: 2, rev: 'synthetic-single', entries: [{ id: 'single', label: '合成会话标题', status: 'idle', actionText: '待命', detailText: '等待指令输入' }], nudges: [], config: { scale: 1, glowEffect: true, expandOnHover: true, notchEnabled: true, jumpEnabled: true }, bridge: { ok: true, port: 0, pending: 0 }, jump: null, serverNow: Date.now() });
+  win.webContents.send('island:snapshot', { v: 2, rev: 'synthetic-single', entries: [{ id: 'single', label: '合成会话标题', status: 'interrupted', actionText: '不显示', detailText: '等待指令输入' }], nudges: [], config: { scale: 1, glowEffect: true, expandOnHover: true, notchEnabled: true, jumpEnabled: true }, bridge: { ok: true, port: 0, pending: 0 }, jump: null, serverNow: Date.now() });
   await new Promise(resolve => setTimeout(resolve, 150));
   await win.webContents.executeJavaScript("document.querySelector('#compact').click()");
   await new Promise(resolve => setTimeout(resolve, 400));
@@ -51,9 +79,9 @@ app.whenReady().then(async () => {
     const label = row?.querySelector('.label');
     const action = row?.querySelector('.tag');
     const rect = element => { const r = element?.getBoundingClientRect(); return r && { left: r.left, right: r.right, top: r.top, bottom: r.bottom, height: r.height }; };
-    return { expanded: document.querySelector('#island').dataset.expanded, count: document.querySelectorAll('#list .row').length, detailDisplay: getComputedStyle(document.querySelector('#detail')).display, label: label?.textContent, action: action?.textContent, labelBox: rect(label), actionBox: rect(action), rowBox: rect(row), islandBox: rect(document.querySelector('#island')) };
+    return { expanded: document.querySelector('#island').dataset.expanded, count: document.querySelectorAll('#list .row').length, text: row?.innerText.replace(/\\s/g, ''), label: label?.textContent, action: action?.textContent, labelBox: rect(label), actionBox: rect(action), rowBox: rect(row), islandBox: rect(document.querySelector('#island')) };
   })()`);
   console.log(JSON.stringify({ single }));
-  if (single.expanded !== '1' || single.count !== 1 || single.detailDisplay !== 'none' || single.label !== '合成会话标题' || single.action !== '待命' || !single.rowBox || single.rowBox.height <= 0 || single.labelBox.right > single.actionBox.left + 1 || single.actionBox.right > single.islandBox.right + 1 || single.rowBox.bottom > single.islandBox.bottom + 1) throw new Error('Single-session title/action layout invalid');
+  if (single.expanded !== '1' || single.count !== 1 || single.text !== '合成会话标题中断' || single.label !== '合成会话标题' || single.action !== '中断' || !single.rowBox || single.rowBox.height <= 0 || single.labelBox.right > single.actionBox.left + 1 || single.actionBox.right > single.islandBox.right + 1 || single.rowBox.bottom > single.islandBox.bottom + 1) throw new Error('Single-session title/action layout invalid');
   app.exit(0);
 }).catch(error => { console.error(error.message); app.exit(1); });

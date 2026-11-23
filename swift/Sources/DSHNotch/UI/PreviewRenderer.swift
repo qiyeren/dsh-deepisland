@@ -113,43 +113,43 @@ enum PreviewRenderer {
 
     /// 造一组多会话样本（已按 `SessionMonitor.order` 排好序，与真实运行一致）。
     ///
-    /// 会话名用中文标题而非路径名 —— DSH 会把会话标题写进投影缓存
-    /// （本机实测如「高难度数学试卷出题」），那才是列表里真正显示的文本。
+    /// 与真实列表一样，优先显示投影里的会话标题而非路径名。
+    /// 此处的项目、域名和会话标题均为示例。
     private static func multiSessions(now: Double, count: Int) -> [SessionEntry] {
-        let waiting = entry("sodasystem 软著",
+        let waiting = entry("示例文档评审",
                             sample(status: .waiting, title: "等待人工确认",
-                                   detail: "提问: 是否覆盖写回 软著申请材料.docx？",
+                                   detail: "提问: 是否覆盖写回 示例文档.docx？",
                                    tool: "ask", toolCount: 3, elapsedMs: 128_000, now: now,
                                    proj: richProjections(contextUsed: 168_000), waiting: true),
-                            ageSec: 9, project: "--Users-delinger-Desktop-~7EFC~6D4B--")
-        let tool = entry("深岛刘海插件",
+                            ageSec: 9, project: "--example-workspaces-docs--")
+        let tool = entry("示例界面插件",
                          sample(status: .tool, title: "执行 edit",
                                 detail: "swift/Sources/DSHNotch/UI/NotchContentView.swift",
                                 tool: "edit", toolCount: 12, elapsedMs: 96_000, now: now,
                                 proj: richProjections(contextUsed: 77_628),
                                 agents: 2),
-                         ageSec: 1, project: "--Users-delinger-Desktop-deepisland--")
-        let thinking = entry("高难度数学试卷出题",
+                         ageSec: 1, project: "--example-workspaces-demo--")
+        let thinking = entry("编写示例练习",
                              sample(status: .thinking, title: "深度思考中...",
                                     detail: "正在为第 12 题构造干扰项",
                                     tool: nil, toolCount: 4, elapsedMs: 62_000, now: now,
                                     proj: richProjections(contextUsed: 96_000)),
-                             ageSec: 3, project: "--Users-delinger-Desktop-office--")
-        let done = entry("itti.top 巡检",
+                             ageSec: 3, project: "--example-workspaces-docs--")
+        let done = entry("example.org 巡检",
                          sample(status: .done, title: "任务已完成", detail: "调用 9 次工具",
                                 tool: nil, toolCount: 9, elapsedMs: 214_000, now: now,
                                 proj: richProjections(contextUsed: 64_000)),
-                         ageSec: 40, project: "--Users-delinger-Desktop-office--")
-        let idle1 = entry("GOFS 部署脚本",
+                         ageSec: 40, project: "--example-workspaces-docs--")
+        let idle1 = entry("示例部署脚本",
                           sample(status: .idle, title: "DeepSeek 待命", detail: "等待指令输入",
                                  tool: nil, toolCount: 0, elapsedMs: 0, now: now,
                                  proj: richProjections(contextUsed: 31_000)),
-                          ageSec: 600, project: "--Users-delinger-Desktop-gofs--")
-        let idle2 = entry("概率论 20 课时",
+                          ageSec: 600, project: "--example-workspaces-deploy--")
+        let idle2 = entry("整理示例课程",
                           sample(status: .idle, title: "DeepSeek 待命", detail: "等待指令输入",
                                  tool: nil, toolCount: 0, elapsedMs: 0, now: now,
                                  proj: richProjections(contextUsed: 52_000)),
-                          ageSec: 1200, project: "--Users-delinger-Desktop-office--")
+                          ageSec: 1200, project: "--example-workspaces-docs--")
 
         let all = [idle2, idle1, done, thinking, tool, waiting]
         return Array(SessionMonitor.order(all).prefix(count))
@@ -205,10 +205,10 @@ enum PreviewRenderer {
         p.turns = 3
         p.steps = 98
         p.pendingCallIds = pending
-        p.provider = "itti"
+        p.provider = "example"
         p.modelName = "gemini-3.8-flash-high"
         p.permissionPreset = "workspace-write"
-        p.title = "刘海屏智能体插件调研"
+        p.title = "示例界面调研"
         if !todos.isEmpty {
             p.todoTotal = todos.count
             p.todoDone = todos.filter { $0.1 == "completed" }.count

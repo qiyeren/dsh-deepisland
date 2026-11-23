@@ -1,64 +1,11 @@
 'use strict';
-// Synthetic events and an in-memory DOM only: no Electron, session files, or services.
+// Legacy activity parsing still protects sensitive values. The Windows renderer
+// receives the separate five-state feed, exercised in expanded-session-layout.test.js.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
-const { ActivityCursor, STATUS_META } = require('../src/activity.js');
-const { buildSnapshot } = require('../src/snapshot.js');
+const { ActivityCursor } = require('../src/activity.js');
 
 function event(seq, type, data = {}) { return { seq, type, data, time: 1000 + seq }; }
-
-// Execute the real renderer with only the DOM surface needed by its public snapshot callback.
-function rendererHarness() {
-  class Element {
-    constructor() {
-      this._text = '';
-      this.children = [];
-      this.attrs = new Map();
-      this.classes = new Set();
-      this.listeners = new Map();
-      const props = new Map();
-      this.style = { getPropertyValue: key => props.get(key) || '', setProperty: (key, value) => props.set(key, value) };
-      this.classList = {
-        contains: cls => this.classes.has(cls),
-        toggle: (cls, on) => on ? this.classes.add(cls) : this.classes.delete(cls),
-      };
-    }
-    set className(value) { this.classes = new Set(value.split(/\s+/).filter(Boolean)); }
-    set textContent(value) { this._text = String(value); this.children = []; }
-    get textContent() { return this._text + this.children.map(child => child.textContent).join(''); }
-    setAttribute(key, value) { this.attrs.set(key, String(value)); }
-    getAttribute(key) { return this.attrs.get(key) || null; }
-    removeAttribute(key) { this.attrs.delete(key); }
-    append(...children) { for (const child of children) this.appendChild(child); }
-    appendChild(child) { child.parent = this; this.children.push(child); return child; }
-    insertBefore(child, before) {
-      if (child.parent) child.remove();
-      const i = this.children.indexOf(before);
-      child.parent = this;
-      this.children.splice(i < 0 ? this.children.length : i, 0, child);
-    }
-    remove() { if (this.parent) this.parent.children.splice(this.parent.children.indexOf(this), 1); this.parent = null; }
-    addEventListener(type, fn) { this.listeners.set(type, fn); }
-    click() { this.listeners.get('click')?.({}); }
-  }
-  const nodes = new Map();
-  const node = id => { if (!nodes.has(id)) nodes.set(id, new Element()); return nodes.get(id); };
-  let onSnapshot;
-  const document = {
-    documentElement: new Element(), getElementById: node,
-    querySelector: () => null, addEventListener() {},
-    createElement: () => new Element(),
-    createTextNode: text => { const el = new Element(); el.textContent = text; return el; },
-  };
-  const window = { addEventListener() {}, island: { onSnapshot: callback => { onSnapshot = callback; } } };
-  const context = { document, window, requestAnimationFrame() {}, setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, console };
-  const source = fs.readFileSync(path.join(__dirname, '../src/renderer.js'), 'utf8');
-  vm.runInNewContext(source, context, { filename: 'renderer.js' });
-  return { node, snapshot: snap => onSnapshot(snap) };
-}
 
 test('sensitive tool calls hide name and arguments while keeping tool and approval state', () => {
   for (const name of ['subagent', 'subagent_fork', 'send_message', 'list_agents', 'wait_agent', 'workflow', 'ralph', 'mnemon_recall', 'mnemon_subagent_result', 'mnemon_runtime_memory', 'mcp__mnemon__recall', 'mcp__mnemon__search']) {
@@ -106,15 +53,8 @@ test('assistant text cannot overwrite a pending sensitive operation or its appro
       assert.equal(pending.status, expectedStatus);
       assert.equal(pending.isWaitingApproval, expectedStatus === 'waiting');
       assert.equal(pending.detail, expectedDetail);
-      const ui = rendererHarness();
-      ui.snapshot(buildSnapshot({ entries: [entryFromActivity(pending)], now: 1002 }));
-      ui.node('compact').click();
-      assert.equal(ui.node('list').children[0].children[3].textContent, pending.title);
-      assert.doesNotMatch(ui.node('list').textContent, /PRIVATE/);
       const result = cursor.apply([event(3, 'tool/result', { callId: 'x' })], 1003);
-      ui.snapshot(buildSnapshot({ entries: [entryFromActivity(result)], now: 1003 }));
       assert.equal(result.detail, '正在分析执行结果');
-      assert.equal(ui.node('list').children[0].children[3].textContent, result.title);
       const resumed = cursor.apply([event(4, 'assistant/message', { text: 'subagent 和 mnemon_recall 是文档里的普通文本' })], 1004);
       assert.equal(resumed.status, 'thinking');
       assert.equal(resumed.detail, 'subagent 和 mnemon_recall 是文档里的普通文本');
@@ -127,7 +67,7 @@ test('assistant text cannot overwrite a pending sensitive operation or its appro
   assert.equal(text.detail, '普通文本提及 subagent');
 });
 
-test('assistant message preceding a structured sensitive tool call renders neutral content', () => {
+test('assistant message preceding a structured sensitive tool call produces neutral activity', () => {
   for (const name of ['subagent', 'subagent_fork', 'send_message', 'mnemon_recall', 'mcp__mnemon__recall']) {
     for (const [ordinaryCallPosition, includeTopLevelText, contentKind] of [
       ['none', false, 'reasoning'], ['before', false, 'text'], ['after', false, 'both'], ['after', true, 'both'],
@@ -146,10 +86,6 @@ test('assistant message preceding a structured sensitive tool call renders neutr
       const state = c.apply([event(2, 'assistant/message', data)], 1002);
       assert.equal(state.status, 'thinking');
       assert.doesNotMatch([state.title, state.detail, state.currentTool].join(' '), /PRIVATE|subagent|mnemon_/);
-      const ui = rendererHarness();
-      ui.snapshot(buildSnapshot({ entries: [entryFromActivity(state)], now: 1002 }));
-      ui.node('compact').click();
-      assert.doesNotMatch(ui.node('list').textContent, /PRIVATE|subagent|mnemon_/);
       c.apply([event(3, 'tool/call', { callId: 'hidden', name })], 1003);
       c.apply([event(4, 'tool/result', { message: { toolCallId: 'hidden' } })], 1004);
       assert.equal(c.apply([event(5, 'assistant/message', { text: '后续普通正文' })], 1005).detail, '后续普通正文');
@@ -219,82 +155,6 @@ test('ordinary tools and message text containing keywords remain unchanged', () 
   assert.equal(ask.detail, '提问: 普通审批');
 });
 
-test('compact and expanded renderer never shows a subagent count', () => {
-  const ui = rendererHarness();
-  ui.snapshot({ rev: 'synthetic-1', entries: [{ id: 's', label: 'Main', status: 'tool', tag: 'Executing Tool', badge: 'Executing Tool', subagentText: '97', toolCountText: '3 次' }], nudges: [], config: {}, bridge: {} });
-  assert.equal(ui.node('c-chip').textContent, 'Executing Tool');
-  ui.node('compact').click();
-  const stats = ui.node('stats').children.filter(item => !item.classList.contains('is-off'));
-  assert.ok(stats.some(item => item.getAttribute('data-key') === 'tools' && item.textContent.includes('3 次')));
-  assert.ok(!stats.some(item => item.textContent.includes('97') || item.textContent.includes('子代理')));
-});
-
-// Monitor normally maps Activity into these public DTO fields; synthesize only that boundary.
-function entryFromActivity(a, id = 'main') {
-  return {
-    id, label: 'Main session', status: a.status,
-    badge: STATUS_META[a.status].badge,
-    tag: a.currentTool || STATUS_META[a.status].badge,
-    actionText: a.title, detailText: a.detail, toolCountText: a.toolCount + ' 次',
-    subagentText: '97',
-  };
-}
-
-test('sensitive events remain neutral through snapshot and real compact/expanded rendering', () => {
-  for (const name of ['subagent_fork', 'mnemon_document_search', 'mcp__mnemon__recall']) {
-    const cursor = new ActivityCursor();
-    const a = cursor.apply([event(1, 'tool/call', { callId: 'sensitive', name, arguments: { description: 'PRIVATE DETAILS' } })], 1001);
-    const ui = rendererHarness();
-    ui.snapshot(buildSnapshot({ entries: [entryFromActivity(a)], now: 1001 }));
-    assert.equal(ui.node('island').getAttribute('data-mode'), 'compact');
-    assert.equal(ui.node('island').getAttribute('data-status'), 'tool');
-    assert.equal(ui.node('c-chip').textContent, 'Executing Tool');
-    ui.node('compact').click();
-    assert.equal(ui.node('island').getAttribute('data-mode'), 'hud');
-    assert.equal(ui.node('list').children[0].children[3].textContent, '执行中');
-    assert.doesNotMatch(ui.node('list').textContent + ui.node('h-badge').textContent, /subagent|mnemon_|PRIVATE|97/);
-  }
-});
-
-test('normal activity retains ordinary keyword-bearing details and displays its tool action', () => {
-  const cursor = new ActivityCursor();
-  cursor.apply([event(1, 'tool/call', { callId: 'hidden', name: 'mnemon_recall', arguments: { description: 'PRIVATE' } })], 1001);
-  cursor.apply([event(2, 'tool/result', { callId: 'hidden' })], 1002);
-  const a = cursor.apply([event(3, 'tool/call', { callId: 'normal', name: 'read', arguments: { file_path: 'docs/subagent-mnemon_recall.txt' } })], 1003);
-  const ui = rendererHarness();
-  ui.snapshot(buildSnapshot({ entries: [entryFromActivity(a)], now: 1003 }));
-  assert.equal(ui.node('c-chip').textContent, 'read');
-  ui.node('compact').click();
-  assert.equal(a.detail, 'docs/subagent-mnemon_recall.txt');
-  assert.equal(ui.node('list').children[0].children[3].textContent, '执行 read');
-});
-
-test('multi-session rows display neutral sensitive action and normal action', () => {
-  const a = new ActivityCursor().apply([event(1, 'tool/call', { name: 'subagent_fork', arguments: { description: 'PRIVATE DETAILS' } })], 1001);
-  const b = new ActivityCursor().apply([event(1, 'tool/call', { name: 'read', arguments: { file_path: 'normal.txt' } })], 1001);
-  const ui = rendererHarness();
-  ui.snapshot(buildSnapshot({ entries: [entryFromActivity(a, 'first'), entryFromActivity(b, 'second')], now: 1001 }));
-  assert.equal(ui.node('c-chip').textContent, '2/2');
-  ui.node('compact').click();
-  const rows = ui.node('list').children;
-  assert.equal(rows.length, 2);
-  assert.match(rows[0].textContent, /执行中/);
-  assert.doesNotMatch(rows[0].textContent, /subagent|PRIVATE|97/);
-  assert.match(rows[1].textContent, /执行 read/);
-});
-
-test('sensitive approval stays waiting in the rendered island without disclosing the question', () => {
-  const cursor = new ActivityCursor();
-  const a = cursor.apply([event(1, 'tool/call', { callId: 'sensitive', name: 'subagent', arguments: { question: 'PRIVATE QUESTION' } })], 1001);
-  const ui = rendererHarness();
-  ui.snapshot(buildSnapshot({ entries: [entryFromActivity(a)], now: 1001 }));
-  assert.equal(ui.node('island').getAttribute('data-status'), 'waiting');
-  assert.equal(ui.node('island').getAttribute('data-mode'), 'hud');
-  assert.equal(ui.node('h-badge').textContent, 'Action Required');
-  assert.equal(ui.node('list').children[0].children[3].textContent, '等待人工确认');
-  assert.doesNotMatch(ui.node('list').textContent + ui.node('h-badge').textContent, /subagent|PRIVATE/);
-});
-
 test('concurrent sensitive calls stay protected through ordinary results and release independently', () => {
   for (const resultOf of [id => ({ message: { toolCallId: id } }), id => ({ message: { source: { kind: 'tool', callId: id } } })]) {
     const c = new ActivityCursor();
@@ -308,10 +168,6 @@ test('concurrent sensitive calls stay protected through ordinary results and rel
     assert.equal(pending.status, 'tool');
     assert.equal(pending.currentTool, null);
     assert.doesNotMatch(pending.detail, /PRIVATE/);
-    const ui = rendererHarness();
-    ui.snapshot(buildSnapshot({ entries: [entryFromActivity(pending)], now: 1005 }));
-    ui.node('compact').click();
-    assert.doesNotMatch(ui.node('list').textContent, /PRIVATE/);
     c.apply([event(6, 'tool/result', resultOf('h1'))], 1006);
     assert.doesNotMatch(c.apply([event(7, 'assistant/message', { text: 'PRIVATE SECOND TOOL DETAILS' })], 1007).detail, /PRIVATE/);
     c.apply([event(8, 'tool/result', resultOf('h2'))], 1008);
@@ -395,10 +251,6 @@ test('question replies preserve in-flight protection, ordinary approval and the 
     assert.equal(state.currentTool, null);
     state = c.apply([event(6, 'assistant/message', { text: 'PRIVATE GENERATED DETAILS' })], 1006);
     assert.doesNotMatch(state.detail, /PRIVATE/);
-    const ui = rendererHarness();
-    ui.snapshot(buildSnapshot({ entries: [entryFromActivity(state)], now: 1006 }));
-    ui.node('compact').click();
-    assert.doesNotMatch(ui.node('list').textContent, /PRIVATE/);
     c.apply([event(7, 'tool/result', { message: { toolCallId: 'hidden' } })], 1007);
     state = c.apply([event(8, 'assistant/message', { text: '正常正文' })], 1008);
     assert.equal(state.detail, '正常正文');

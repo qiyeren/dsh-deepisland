@@ -3,11 +3,11 @@
 import assert from 'node:assert/strict';
 import { attachNudges, NudgeCenter } from '../lib/nudge.js';
 
-function fixture(initial, getConfig) {
+function fixture(initial, getConfig, projections) {
   const handlers = new Map();
   const calls = [];
   const questions = { async ask(request) { calls.push(request); return 'answered'; } };
-  const services = { approval: {}, userQuestions: questions, sessionTitle: undefined };
+  const services = { approval: {}, userQuestions: questions, sessionProjections: projections };
   const ctx = {
     on(name, handler) { handlers.set(name, handler); },
     get(name) {
@@ -29,6 +29,20 @@ const config = (changes = {}) => ({ nudgeEnabled: true, nudgeOnCompleted: true,
 const done = (f) => f.event('turn/end', { reason: { kind: 'completed' } });
 const fail = (f) => f.event('turn/end', { reason: { kind: 'error', error: { message: 'synthetic failure' } } });
 
+// Tool/token bursts do not prompt reads of settings, titles or session history.
+{
+  let configs = 0, titles = 0;
+  const f = fixture(config(), () => { configs++; return config(); }, {
+    cachedSnapshot(s, keys) { assert.equal(s, f.session); assert.deepEqual(keys, ['title']); titles++; return {values:{title:'示例会话'}}; }
+  });
+  for (let i=0;i<1000;i++) {
+    f.event('tool/call', {name:'read'}); f.event('tool/result', {isError:true}); f.event('model/delta', {});
+  }
+  assert.deepEqual([configs,titles], [0,0]);
+  done(f);
+  assert.deepEqual([configs,titles], [1,1]); assert.equal(f.center.list()[0].title, '示例会话');
+  f.dispose();
+}
 // Updates are read at delivery time, with no polling or bridge.
 {
   let live = config({ nudgeOnCompleted: false });

@@ -25,7 +25,7 @@ function uiHarness(jump, ack, openDsh = async () => ({ ok: true })) {
     setClass: (n, c, on) => { if (on) n.classes.add(c); else n.classes.delete(c); },
     setTimeout: () => 1, clearTimeout() {}, RESULT_HOLD_MS: 6000 };
   vm.createContext(context);
-  vm.runInContext(extract(source, 'function updateHint()', '\n  /* ───────────────────────────── 本地秒级时钟') + '\n' +
+  vm.runInContext(extract(source, 'function updateHint()', '\n  /* ───────────────────────────── 高度：ResizeObserver') + '\n' +
     extract(source, 'async function handleNudgeClick(', '\n  /* ───────────── 会话行') + '\n' +
     extract(source, 'function openDsh()', '\n  function openContextMenu()') + '\n' +
     'function render() { updateHint(); }', context);
