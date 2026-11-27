@@ -122,4 +122,24 @@ test('zero sessions with a synthetic reminder retains the reminder without inven
   assert.equal(ui.node('nudges').children.length, 1);
   assert.equal(ui.node('nudges').children[0].getAttribute('data-id'), 'fake-notice');
   assert.equal(ui.acknowledgements.length, 0);
+  // Still collapsed once unpinned: the capsule falls back to the session carried by
+  // the completion reminder, at full active width rather than the idle label.
+  ui.node('compact').click();
+  assert.equal(ui.node('island').getAttribute('data-mode'), 'compact');
+  ui.snapshot({ rev: 'orphan', entries: [], nudges: [{ id: 'orphan-done', kind: 'completed', sessionId: 'ended-session', label: '已结束会话' }], config: {}, bridge: {} });
+  assert.equal(ui.node('island').getAttribute('data-mode'), 'compact');
+  assert.equal(ui.node('island').getAttribute('data-live'), '1');
+  assert.equal(ui.node('c-title-text').textContent, '已结束会话');
+  assert.equal(ui.node('c-chip').textContent, '回合完成');
+  // Only a reminder with a session ID can supply the name; clearing it goes back to idle.
+  ui.snapshot({ rev: 'orphan-gone', entries: [], nudges: [], config: {}, bridge: {} });
+  assert.equal(ui.node('island').getAttribute('data-live'), '0');
+  assert.equal(ui.node('c-title-text').textContent, '暂无会话');
+  assert.equal(ui.node('c-chip').textContent, '');
+  // Disconnect outranks the fallback: it must not read as a normal completion.
+  ui.snapshot({ rev: 'orphan-offline', entries: [], nudges: [{ id: 'orphan-done', kind: 'completed', sessionId: 'ended-session', label: '已结束会话' }], config: {}, bridge: { statesOnline: false } });
+  assert.equal(ui.node('c-title-text').textContent, '状态暂不可用');
+  assert.equal(ui.node('island').getAttribute('data-live'), '0');
+  assert.equal(ui.acknowledgements.length, 0);
+  assert.equal(ui.jumps.length, 0);
 });

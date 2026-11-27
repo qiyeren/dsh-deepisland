@@ -289,6 +289,7 @@
     const entries = state.entries;
     const primary = state.primary;
     const expanded = shouldExpand();
+    const shown = displayedPrimary(expanded);
 
     if (state.expanded !== expanded) {
       state.expanded = expanded;
@@ -300,17 +301,17 @@
     if (state.mode !== mode) { state.mode = mode; state.rectDirty = true; }
 
     const island = $('island');
-    const status = primary ? primary.status : '';
+    const status = shown ? shown.status : '';
     setAttr(island, 'data-mode', mode);
     setAttr(island, 'data-expanded', expanded ? '1' : '0');
     setAttr(island, 'data-status', status);
-    setAttr(island, 'data-live', primary ? '1' : '0');
+    setAttr(island, 'data-live', shown ? '1' : '0');
     setAttr(island, 'data-glow', cfg.glowEffect ? '1' : '0');
     setAttr(island, 'data-pinned', state.pinned ? '1' : '0');
-    const name = primary ? sessionLabel(primary) : emptyLabel();
-    const tag = primary ? STATUS.get(status).label : '';
-    setAttr(island, 'aria-label', primary ? name + '，' + tag : name);
-    setHidden($('c-dot'), !primary);
+    const name = shown ? sessionLabel(shown) : emptyLabel();
+    const tag = shown ? STATUS.get(status).label : '';
+    setAttr(island, 'aria-label', shown ? name + '，' + tag : name);
+    setHidden($('c-dot'), !shown);
     renderCompact(name, tag);
     if (expanded || !entries.length) renderRows(entries);
     if (expanded) {
@@ -393,12 +394,14 @@
     setHidden(row.at, !atText && !count);
   }
 
-  function renderNudges(list) {
-    const host = $('nudges');
-    // 渲染层**不再截断**：条数上限来自配置（nudgeMaxItems，1..8），已由主进程
-    // 按它裁过一次。这里再写一个 4 会与配置打架 —— 用户把它调到 6，界面却只
-    // 显示 4 条，而「为什么少了两条」在界面上没有任何线索。
-    // Display at most one reminder per identified session, without altering the queue.
+  /**
+   * 展开 HUD 里实际列出的提醒：同一会话只留最新一条，不改队列。
+   *
+   * 渲染层**不再截断**：条数上限来自配置（nudgeMaxItems，1..8），已由主进程
+   * 按它裁过一次。这里再写一个 4 会与配置打架 —— 用户把它调到 6，界面却只
+   * 显示 4 条，而「为什么少了两条」在界面上没有任何线索。
+   */
+  function displayNudges(list) {
     const items = [];
     const positions = new Map();
     for (const item of Array.isArray(list) ? list : []) {
@@ -414,7 +417,33 @@
             (!Number.isFinite(previous.atMs) || item.atMs > previous.atMs)) items[index] = item;
       }
     }
+    return items;
+  }
 
+  /**
+   * 折叠态回退：一条「回合完成」提醒可能比它的会话行活得久。
+   *
+   * 此时折叠胶囊显示该会话名与「回合完成」，而不是空板式的「暂无会话」。
+   * 纯展示：不跳转、不确认、不凭提醒臆造会话状态；没有会话 id 的提醒
+   * （系统类）仍回落到「暂无会话」，断线也仍然优先显示「状态暂不可用」。
+   *
+   * @returns {{id: string, label: string, status: 'done'}|null}
+   */
+  function fallbackPrimary() {
+    if (state.primary) return null;
+    if (state.snap?.bridge?.statesOnline === false) return null;
+    const item = displayNudges(mainNudges()).find((n) => n && n.sessionId && n.kind === 'completed');
+    return item ? { id: item.sessionId, label: item.label, status: 'done' } : null;
+  }
+
+  /** 折叠胶囊展示的主行：会话状态优先，完成提醒可回退；展开时只认会话行。 */
+  function displayedPrimary(expanded) {
+    return expanded ? state.primary : (state.primary || fallbackPrimary());
+  }
+
+  function renderNudges(list) {
+    const host = $('nudges');
+    const items = displayNudges(list);
     const keep = new Set(items.map((it) => it && it.id).filter(Boolean));
     for (const [id, row] of state.nudgeRows) {
       if (!keep.has(id)) { row.node.remove(); state.nudgeRows.delete(id); }

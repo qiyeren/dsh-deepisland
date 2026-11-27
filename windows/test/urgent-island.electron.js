@@ -121,14 +121,33 @@ app.whenReady().then(async () => {
   const compactBox = () => win.webContents.executeJavaScript(`(() => {
     const q = s => document.querySelector(s).getBoundingClientRect();
     const b = q('#island'), t = q('#c-title-text'), u = q('#urgent-island'), x = q('#urgent-close');
-    return { width: b.width, height: b.height, center: b.x + b.width / 2, leftPad: t.left - b.left, rightPad: b.right - t.right, text: document.querySelector('#c-title-text').textContent, childWidth: u.width, childX: x.x + x.width / 2, childY: x.y + x.height / 2, childHit: x.height > 0 && document.elementFromPoint(x.x+x.width/2,x.y+x.height/2)?.id === 'urgent-close' };
+    return { width: b.width, height: b.height, center: b.x + b.width / 2, leftPad: t.left - b.left, rightPad: b.right - t.right, text: document.querySelector('#c-title-text').textContent, chip: document.querySelector('#c-chip').textContent, chipWidth: q('#c-chip').width, dot: q('#c-dot').width, childWidth: u.width, childX: x.x + x.width / 2, childY: x.y + x.height / 2, childHit: x.height > 0 && document.elementFromPoint(x.x+x.width/2,x.y+x.height/2)?.id === 'urgent-close' };
   })()`);
-  send('width-idle', [], [{ id: 'ordinary-width-test', kind: 'completed', sessionId: 's', label: '完成提醒' }]); await wait();
+  // Nothing at all: the idle capsule hugs its own four-character label.
+  send('width-idle-empty', [], []); await wait();
   const idle = await compactBox();
-  if (idle.text !== '暂无会话' || Math.abs(idle.width - 62) > 3 || Math.abs(idle.height - 14) > 0.5 || Math.abs(idle.center-cx) > 0.6 || Math.abs(idle.leftPad-8) > 1 || Math.abs(idle.rightPad-8) > 1 || interactive.at(-1) !== false) throw new Error('Idle capsule must hug centered text and give back the vacated pixels: ' + JSON.stringify({idle, interactive}));
-  win.webContents.send('island:snapshot', { rev: 'width-offline', entries: [], nudges: [], bridge: { statesOnline: false }, config: { expandOnHover: false } }); await wait();
+  if (idle.text !== '暂无会话' || idle.chip !== '' || idle.dot !== 0 || Math.abs(idle.width - 62) > 3 || Math.abs(idle.height - 14) > 0.5 || Math.abs(idle.center-cx) > 0.6 || Math.abs(idle.leftPad-8) > 1 || Math.abs(idle.rightPad-8) > 1 || interactive.at(-1) !== false) throw new Error('Idle capsule must hug centered text and give back the vacated pixels: ' + JSON.stringify({idle, interactive}));
+  // A completion reminder can outlive its row: the compact capsule shows that session and state
+  // at the normal active width instead of falling back to «暂无会话».
+  send('width-idle', [], [{ id: 'ordinary-width-test', kind: 'completed', sessionId: 's', label: '完成提醒' }]); await wait();
+  const completion = await compactBox();
+  if (completion.text !== '完成提醒' || completion.chip !== '回合完成' || completion.dot <= 0 || Math.abs(completion.width - 211) > 0.5 || Math.abs(completion.height - 14) > 0.5) throw new Error('Orphaned completion must fill the active capsule by display only: ' + JSON.stringify({completion, interactive}));
+  if (acks !== 0 || jumped !== null) throw new Error('Displaying an orphaned completion must never jump or acknowledge it');
+  // A reminder without a session has no name to show: keep the empty label.
+  send('width-idle-sessionless', [], [{ id: 'sessionless', kind: 'completed', label: '完成提醒' }]); await wait();
+  const sessionless = await compactBox();
+  if (sessionless.text !== '暂无会话' || sessionless.chip !== '' || Math.abs(sessionless.width - 62) > 3) throw new Error('A sessionless reminder must not invent a session row: ' + JSON.stringify(sessionless));
+  // Disconnect outranks the fallback label.
+  win.webContents.send('island:snapshot', { rev: 'width-offline', entries: [], nudges: [{ id: 'offline-done', kind: 'completed', sessionId: 's', label: '完成提醒' }], bridge: { statesOnline: false }, config: { expandOnHover: false } }); await wait();
   const offline = await compactBox();
-  if (offline.text !== '状态暂不可用' || offline.width <= idle.width || Math.abs(offline.center-cx) > 0.6 || Math.abs(offline.leftPad-8) > 1 || Math.abs(offline.rightPad-8) > 1) throw new Error('Offline capsule must fit its own label: ' + JSON.stringify(offline));
+  if (offline.text !== '状态暂不可用' || offline.chip !== '' || offline.width <= idle.width || Math.abs(offline.center-cx) > 0.6 || Math.abs(offline.leftPad-8) > 1 || Math.abs(offline.rightPad-8) > 1) throw new Error('Offline capsule must fit its own label: ' + JSON.stringify(offline));
+  // A later live row outranks the fallback; clearing both returns to the empty capsule.
+  send('width-live-wins', [{ id: 'live', label: '活动会话', status: 'running' }], [{ id: 'ordinary-width-test', kind: 'completed', sessionId: 's', label: '完成提醒' }]); await wait();
+  const live = await compactBox();
+  if (live.text !== '活动会话' || live.chip !== '运行中' || Math.abs(live.width - 211) > 0.5) throw new Error('A live row must outrank the completion fallback: ' + JSON.stringify(live));
+  send('width-empty-again', [], []); await wait();
+  const cleared = await compactBox();
+  if (cleared.text !== '暂无会话' || cleared.chip !== '' || Math.abs(cleared.width - 62) > 3) throw new Error('Clearing the completion must restore the idle capsule: ' + JSON.stringify(cleared));
   send('width-child', [], [{ id: 'urgent-width-test', kind: 'failed', sessionId: 'urgent-s', label: '提醒仍可点' }]); await wait();
   const child = await compactBox();
   if (Math.abs(child.width-idle.width) > 0.5 || Math.abs(child.childWidth-300) > 1 || !child.childHit) throw new Error('Urgent child and close button must not shrink with main island: ' + JSON.stringify(child));
